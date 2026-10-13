@@ -1,0 +1,14 @@
+[package]
+name = "bevy_extend"
+version = "0.20.0-dev"
+edition = "2024"
+description = "Bevy Extend: friendlier UI, an editor and extra rendering features on top of Bevy"
+license = "MIT OR Apache-2.0"
+keywords = ["bevy"]
+publish = false
+
+[dependencies]
+bevy_app = { path = "../bevy_app", version = "0.20.0-dev" }
+
+[lints]
+workspace = true
