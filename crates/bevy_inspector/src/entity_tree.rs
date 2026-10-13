@@ -250,9 +250,13 @@ fn plan_sync(world: &World) -> SyncPlan {
         return plan;
     };
 
+    let root_filter = world
+        .get_resource::<crate::InspectorRootFilter>()
+        .and_then(|filter| filter.0);
     let mut roots: Vec<Entity> = inspected
         .iter_entities()
         .filter(|entity_ref| !entity_ref.contains::<ChildOf>())
+        .filter(|entity_ref| root_filter.is_none_or(|filter| filter(entity_ref)))
         .map(|entity_ref| entity_ref.id())
         .filter(|entity| !is_excluded(inspected, *entity))
         .collect();

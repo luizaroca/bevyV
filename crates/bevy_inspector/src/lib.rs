@@ -28,7 +28,7 @@ use bevy_ecs::{
     reflect::{AppTypeRegistry, ReflectResource},
     resource::Resource,
     schedule::IntoScheduleConfigs,
-    world::World,
+    world::{EntityRef, World},
 };
 use bevy_reflect::{prelude::ReflectDefault, Reflect};
 use bevy_ui::UiSystems;
@@ -68,6 +68,15 @@ pub(crate) fn world_to_inspect(world: &World) -> &World {
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(Resource, Debug, Default, Clone, PartialEq)]
 pub struct InspectorSelection(pub Option<Entity>);
+
+/// An optional filter deciding which root entities the entity tree lists.
+///
+/// Entities without a parent are only listed when the filter returns `true` for them; their
+/// descendants are listed beneath them as usual. With no filter, every root entity is listed.
+/// Tools such as editors use this to hide their own entities (cameras, UI, windows) and show only
+/// the entities that make up the scene being edited.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct InspectorRootFilter(pub Option<fn(&EntityRef) -> bool>);
 
 /// The [`ShortName`] of a component type, taken from the type registry where possible.
 ///
@@ -111,6 +120,7 @@ impl Plugin for InspectorPlugin {
         }
 
         app.init_resource::<InspectorSource>()
+            .init_resource::<InspectorRootFilter>()
             .init_resource::<InspectorSelection>()
             .init_resource::<TreeRowIndex>()
             .init_resource::<EntityTreeSync>()
