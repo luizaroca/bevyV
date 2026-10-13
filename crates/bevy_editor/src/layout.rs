@@ -35,6 +35,7 @@ use bevy::{
 
 use crate::{
     history::{self, History},
+    level,
     play::{self, EditorMode},
     selection::GizmoVisible,
     shortcuts,
@@ -90,6 +91,24 @@ fn menu_bar() -> impl Scene {
                 --
                 @FeathersMenuPopup
                 Children [
+                    @FeathersMenuItem { @caption: bsn! { @caption("New Level    Ctrl+N") } }
+                    on(|_: On<Activate>, mut commands: Commands| commands.queue(level::new_level))
+                    --
+                    @FeathersMenuItem { @caption: bsn! { @caption("Open Level...    Ctrl+O") } }
+                    on(|_: On<Activate>, mut commands: Commands| commands.queue(level::open_level))
+                    --
+                    @FeathersMenuDivider
+                    --
+                    @FeathersMenuItem { @caption: bsn! { @caption("Save Level    Ctrl+S") } }
+                    on(|_: On<Activate>, mut commands: Commands| commands.queue(level::save_level))
+                    --
+                    @FeathersMenuItem { @caption: bsn! { @caption("Save Level As...    Ctrl+Shift+S") } }
+                    on(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(level::save_level_as);
+                    })
+                    --
+                    @FeathersMenuDivider
+                    --
                     @FeathersMenuItem { @caption: bsn! { @caption("Exit") } }
                     on(|_: On<Activate>, mut exit: MessageWriter<AppExit>| {
                         exit.write(AppExit::Success);
@@ -149,7 +168,7 @@ fn menu_bar() -> impl Scene {
 const SHORTCUT_HELP: &str = "Viewport: RMB+mouse look, RMB+WASD/QE fly, RMB+wheel speed, \
     LMB drag walk, MMB pan, Alt+LMB orbit, Alt+RMB dolly, wheel dolly, F frame. \
     Tools: Q select, W move, E rotate, R scale, Space cycle, Ctrl+` local/world. \
-    Edit: Ctrl+Z undo, Ctrl+Y redo, Del delete. Play: Alt+P play/stop, Esc stop.";
+    Edit: Ctrl+Z undo, Ctrl+Y redo, Del delete.     File: Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as. Play: Alt+P play/stop, Esc stop.";
 
 fn toolbar() -> impl Scene {
     bsn! {

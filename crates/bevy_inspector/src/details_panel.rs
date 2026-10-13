@@ -836,7 +836,15 @@ pub fn sync_details_panel(world: &mut World) {
     };
 
     let inspected = crate::world_to_inspect(world);
-    let components = inspect_components(inspected, selection);
+    let mut components = inspect_components(inspected, selection);
+    if let Some(rank) = world
+        .get_resource::<crate::InspectorComponentOrder>()
+        .and_then(|order| order.0)
+    {
+        components.retain(|component| rank(&component.type_path).is_some());
+        // Stable, so components of equal rank keep their alphabetical order.
+        components.sort_by_key(|component| rank(&component.type_path).unwrap_or_default());
+    }
     let empty = empty_state(inspected, selection, &components);
 
     let index = world.resource::<DetailsIndex>();

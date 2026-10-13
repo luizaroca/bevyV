@@ -78,6 +78,15 @@ pub struct InspectorSelection(pub Option<Entity>);
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub struct InspectorRootFilter(pub Option<fn(&EntityRef) -> bool>);
 
+/// An optional rule for which components the details panel shows, and in what order.
+///
+/// The function receives a component's full type path. It returns `None` to hide the component,
+/// or a rank: components are shown in ascending rank, and alphabetically within a rank. With no
+/// rule, every component is shown alphabetically. Editors use this to put the most-used
+/// components first and hide ones that are computed by the engine.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct InspectorComponentOrder(pub Option<fn(&str) -> Option<i32>>);
+
 /// The [`ShortName`] of a component type, taken from the type registry where possible.
 ///
 /// [`ComponentInfo::name`] is only populated when the `debug` feature of `bevy_utils` is enabled,
@@ -121,6 +130,7 @@ impl Plugin for InspectorPlugin {
 
         app.init_resource::<InspectorSource>()
             .init_resource::<InspectorRootFilter>()
+            .init_resource::<InspectorComponentOrder>()
             .init_resource::<InspectorSelection>()
             .init_resource::<TreeRowIndex>()
             .init_resource::<EntityTreeSync>()

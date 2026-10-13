@@ -34,6 +34,7 @@ pub trait EditorCommand: Send + Sync + 'static {
 pub struct History {
     undo: Vec<Box<dyn EditorCommand>>,
     redo: Vec<Box<dyn EditorCommand>>,
+    version: u64,
 }
 
 impl History {
@@ -47,6 +48,13 @@ impl History {
             self.undo.remove(0);
         }
         self.redo.clear();
+        self.version += 1;
+    }
+
+    /// A counter that changes whenever an edit is recorded, undone or redone. Used to tell
+    /// whether the level has unsaved changes.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// The label of the command [`undo`] would revert.
@@ -63,6 +71,7 @@ impl History {
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.version += 1;
     }
 }
 
@@ -73,7 +82,9 @@ pub fn undo(world: &mut World) {
     };
     command.undo(world);
     info!("Undo: {}", command.label());
-    world.resource_mut::<History>().redo.push(command);
+    let mut history = world.resource_mut::<History>();
+    history.redo.push(command);
+    history.version += 1;
 }
 
 /// Re-applies the most recently undone edit.
@@ -83,7 +94,9 @@ pub fn redo(world: &mut World) {
     };
     command.redo(world);
     info!("Redo: {}", command.label());
-    world.resource_mut::<History>().undo.push(command);
+    let mut history = world.resource_mut::<History>();
+    history.undo.push(command);
+    history.version += 1;
 }
 
 /// Replaces a whole component value. Used for gizmo drags and Details panel edits.

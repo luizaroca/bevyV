@@ -12,7 +12,13 @@ bevy = { path = "../..", features = [
   "bevy_dev_tools",
   "render_dev_tools",
   "debug",
+  "serialize",
 ] }
+# Native file and message dialogs for Save/Open.
+rfd = "0.15"
+ron = "0.12"
+serde = "1"
+
 
 [lints]
 workspace = true
