@@ -1,0 +1,14 @@
+[package]
+name = "bevy_extend_sandbox"
+version = "0.20.0-dev"
+edition = "2024"
+description = "A small 3D scene for trying out Bevy Extend features"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+bevy = { path = "../..", version = "0.20.0-dev", features = ["free_camera"] }
+bevy_extend = { path = "../bevy_extend", version = "0.20.0-dev" }
+
+[lints]
+workspace = true
