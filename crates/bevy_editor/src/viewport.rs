@@ -306,7 +306,8 @@ fn navigate(
             }
             Drag::Dolly => {
                 let forward = transform.forward();
-                transform.translation += forward * (delta.x - delta.y) * camera.speed * 0.01;
+                // Maya's direction: dragging right or down dollies in.
+                transform.translation += forward * (delta.x + delta.y) * camera.speed * 0.01;
             }
         }
     } else if over_viewport && wheel != 0.0 {

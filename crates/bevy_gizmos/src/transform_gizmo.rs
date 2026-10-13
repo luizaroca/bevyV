@@ -305,7 +305,7 @@ fn transform_gizmo_hover(
     let Some((camera, cam_tf)) = resolve_gizmo_camera!(marked_cameras, all_cameras) else {
         return;
     };
-    let Some(cursor_pos) = viewport_cursor_position(&window, camera) else {
+    let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
 
@@ -419,7 +419,7 @@ fn transform_gizmo_drag(
         return;
     };
     let (window, mut cursor_opts) = primary_window.into_inner();
-    let Some(cursor_pos) = viewport_cursor_position(window, camera) else {
+    let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
 
@@ -749,20 +749,6 @@ pub fn point_to_ring_screen_dist(
     }
 
     min_dist
-}
-
-/// The cursor position relative to the camera's viewport, which is what
-/// [`Camera::viewport_to_world`] and [`Camera::world_to_viewport`] work in.
-///
-/// Cameras that render to a sub-rectangle of the window (such as an editor viewport)
-/// have a viewport origin that differs from the window origin.
-fn viewport_cursor_position(window: &Window, camera: &Camera) -> Option<Vec2> {
-    let cursor = window.cursor_position()?;
-    let origin = camera
-        .logical_viewport_rect()
-        .map(|rect| rect.min)
-        .unwrap_or_default();
-    Some(cursor - origin)
 }
 
 /// Return the effective space for the gizmo: scale always uses local space.

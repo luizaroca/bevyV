@@ -27,7 +27,7 @@ cargo run -p bevy_editor
 | RMB + wheel | Change camera speed |
 | LMB drag on empty space | Move forward/back and turn |
 | MMB drag | Pan |
-| Alt + LMB / RMB / MMB | Orbit / dolly / pan |
+| Alt + LMB / RMB / MMB | Orbit / dolly (Maya direction: right or down moves in) / pan |
 | Wheel | Dolly |
 | F | Frame selection |
 | Q / W / E / R, Space | Select / Move / Rotate / Scale, cycle |
