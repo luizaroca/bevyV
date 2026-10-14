@@ -52,7 +52,9 @@ fn fetch_point_shadow(
     // sampling.
     if ((*light).soft_shadow_size > 0.0) {
         return sample_shadow_cubemap_pcss(
-            frag_ls * flip_z,
+            frag_ls,
+            surface_normal,
+            (*light).light_custom_data,
             distance_to_light,
             depth,
             light_id,

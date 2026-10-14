@@ -1,9 +1,10 @@
-//! Soft shadows test scene: a baseline of what stock Bevy does today.
+//! Soft shadows test scene.
 //!
 //! Mirrors the reference image: a box, a cylinder and a sphere on a grey floor, lit by one close
 //! point light with a physical size, so shadows are sharp where objects touch the floor and blur
-//! further away. It uses Bevy's built-in percentage-closer soft shadows (PCSS), which sit behind
-//! the `experimental_pbr_pcss` feature.
+//! further away. It uses percentage-closer soft shadows (PCSS), which sit behind the
+//! `experimental_pbr_pcss` feature. This fork reworks the point light PCSS shader in
+//! `bevy_pbr/src/render/shadow_sampling.wesl` so the light radius actually controls the penumbra.
 //!
 //! Run it with `cargo run -p bevy_extend_sandbox --bin soft_shadows --release`.
 //!
@@ -11,7 +12,12 @@
 //! - Space: toggle soft shadows (PCSS) on and off
 //! - T: toggle temporal antialiasing (TAA) with the temporal shadow filter
 //! - `[` and `]`: shrink or grow the light, which changes how blurry shadows get
+//! - F12: save a screenshot next to where the app was started
 //! - Hold right click (or press M) to look around, WASD to move, Q/E to go down/up
+//!
+//! For automated comparisons, `SOFT_SHADOWS_AUTOSHOT=path.png` saves a screenshot after a short
+//! warm-up and quits, and `SOFT_SHADOWS_PCSS=0`, `SOFT_SHADOWS_TAA=0` and
+//! `SOFT_SHADOWS_RADIUS=<meters>` override the starting settings.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
@@ -19,12 +25,15 @@ use bevy::{
     core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass},
     light::ShadowFilteringMethod,
     prelude::*,
-    render::camera::TemporalJitter,
+    render::{
+        camera::TemporalJitter,
+        view::screenshot::{save_to_disk, Screenshot},
+    },
 };
 use bevy_extend::ExtendPlugins;
 
 /// Light size range for the `[` and `]` keys, in meters.
-const LIGHT_RADIUS_RANGE: (f32, f32) = (0.02, 1.5);
+const LIGHT_RADIUS_RANGE: (f32, f32) = (0.02, 1.0);
 
 /// Where the light sits: low and close, front right of the objects, like the reference.
 const LIGHT_POSITION: Vec3 = Vec3::new(3.0, 2.2, 3.0);
@@ -38,13 +47,20 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
+        let env_flag = |name: &str| std::env::var(name).map_or(true, |value| value != "0");
         Self {
-            soft_shadows: true,
-            taa: true,
-            light_radius: 0.4,
+            soft_shadows: env_flag("SOFT_SHADOWS_PCSS"),
+            taa: env_flag("SOFT_SHADOWS_TAA"),
+            light_radius: std::env::var("SOFT_SHADOWS_RADIUS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0.4),
         }
     }
 }
+
+/// Frames to wait before the automatic screenshot, so TAA has settled.
+const AUTOSHOT_FRAME: u32 = 120;
 
 #[derive(Component)]
 struct HelpText;
@@ -70,7 +86,10 @@ fn main() {
         })
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.02)))
         .add_systems(Startup, setup)
-        .add_systems(Update, (handle_input, apply_settings).chain())
+        .add_systems(
+            Update,
+            (handle_input, apply_settings, take_screenshots).chain(),
+        )
         .run();
 }
 
@@ -199,7 +218,7 @@ fn apply_settings(
 
     let on_off = |on: bool| if on { "on" } else { "off" };
     help.0 = format!(
-        "Stock Bevy PCSS baseline\n\
+        "Soft shadows test (Bevy Extend PCSS)\n\
          [Space] Soft shadows: {}\n\
          [T] TAA + temporal filter: {}\n\
          [ / ] Light radius: {:.2} m",
@@ -207,4 +226,28 @@ fn apply_settings(
         on_off(settings.taa),
         settings.light_radius,
     );
+}
+
+fn take_screenshots(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut frame: Local<u32>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    *frame += 1;
+    if keys.just_pressed(KeyCode::F12) {
+        let path = format!("soft_shadows_{}.png", *frame);
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+    }
+    if let Ok(path) = std::env::var("SOFT_SHADOWS_AUTOSHOT") {
+        if *frame == AUTOSHOT_FRAME {
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(path));
+        } else if *frame == AUTOSHOT_FRAME + 30 {
+            exit.write(AppExit::Success);
+        }
+    }
 }
