@@ -11,6 +11,8 @@ in Bevy updates rarely conflicts:
 - `crates/bevy_extend`: the fork's plugins. Add `bevy_extend::ExtendPlugins` to an app to use them.
 - `crates/bevy_extend_sandbox`: a small 3D scene for trying features as they land.
   Run it with `cargo run -p bevy_extend_sandbox`.
+  Extra test scenes live in `crates/bevy_extend_sandbox/src/bin`, for example the soft shadows
+  test: `cargo run -p bevy_extend_sandbox --bin soft_shadows --release`.
 
 When a feature does need to change an upstream file, keep the change small and mention it in the PR.
 

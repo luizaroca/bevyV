@@ -103,6 +103,11 @@ pub struct DirectionalLight {
     /// depends on the size of the light; larger lights result in larger
     /// penumbras and therefore blurrier shadows.
     ///
+    /// The size is how many meters the penumbra radius grows per meter between
+    /// the shadow caster and the surface it falls on, which is the tangent of
+    /// the light's angular radius. The real sun is about `0.005`; values around
+    /// `0.02` to `0.1` give soft, stylized shadows.
+    ///
     /// Currently, soft shadows are rather noisy if not using the temporal mode.
     /// If you enable soft shadows, consider choosing
     /// [`ShadowFilteringMethod::Temporal`] and enabling temporal antialiasing
