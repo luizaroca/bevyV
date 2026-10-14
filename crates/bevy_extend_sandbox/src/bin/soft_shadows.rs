@@ -1,14 +1,15 @@
 //! Soft shadows test scene.
 //!
-//! Mirrors the reference image: a box, a cylinder and a sphere on a grey floor, lit by one close
-//! point light with a physical size, so shadows are sharp where objects touch the floor and blur
-//! further away. It uses percentage-closer soft shadows (PCSS), which sit behind the
-//! `experimental_pbr_pcss` feature. This fork reworks the point light PCSS shader in
-//! `bevy_pbr/src/render/shadow_sampling.wesl` so the light radius actually controls the penumbra.
+//! Mirrors the reference image: a box, a cylinder and a sphere on a grey floor, lit by one light
+//! with a physical size, so shadows are sharp where objects touch the floor and blur further away.
+//! It uses percentage-closer soft shadows (PCSS), which sit behind the `experimental_pbr_pcss`
+//! feature. This fork reworks the PCSS shaders in `bevy_pbr/src/render/shadow_sampling.wesl` and
+//! `shadows.wesl` so the light size actually controls the penumbra for every light type.
 //!
 //! Run it with `cargo run -p bevy_extend_sandbox --bin soft_shadows --release`.
 //!
 //! Controls:
+//! - L: switch between a point light, a spot light and a sun (directional light)
 //! - Space: toggle soft shadows (PCSS) on and off
 //! - T: toggle temporal antialiasing (TAA) with the temporal shadow filter
 //! - `[` and `]`: shrink or grow the light, which changes how blurry shadows get
@@ -16,14 +17,14 @@
 //! - Hold right click (or press M) to look around, WASD to move, Q/E to go down/up
 //!
 //! For automated comparisons, `SOFT_SHADOWS_AUTOSHOT=path.png` saves a screenshot after a short
-//! warm-up and quits, and `SOFT_SHADOWS_PCSS=0`, `SOFT_SHADOWS_TAA=0` and
-//! `SOFT_SHADOWS_RADIUS=<meters>` override the starting settings.
+//! warm-up and quits, and `SOFT_SHADOWS_LIGHT=point|spot|sun`, `SOFT_SHADOWS_PCSS=0`,
+//! `SOFT_SHADOWS_TAA=0` and `SOFT_SHADOWS_RADIUS=<meters>` override the starting settings.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass},
-    light::ShadowFilteringMethod,
+    light::{CascadeShadowConfigBuilder, ShadowFilteringMethod},
     prelude::*,
     render::{
         camera::TemporalJitter,
@@ -38,8 +39,44 @@ const LIGHT_RADIUS_RANGE: (f32, f32) = (0.02, 1.0);
 /// Where the light sits: low and close, front right of the objects, like the reference.
 const LIGHT_POSITION: Vec3 = Vec3::new(3.0, 2.2, 3.0);
 
+/// What the point and spot lights aim at, and where the sun shines from.
+const LIGHT_TARGET: Vec3 = Vec3::new(0.0, 0.5, -0.5);
+
+/// Where the sun shines from (only its direction matters).
+const SUN_POSITION: Vec3 = Vec3::new(4.0, 3.0, -2.5);
+
+/// The sun's softness is the tangent of its angular radius, so the light size slider is scaled
+/// down for it: 0.4 on the slider gives the sun a 0.04 penumbra spread per meter.
+const SUN_SIZE_SCALE: f32 = 0.1;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LightKind {
+    Point,
+    Spot,
+    Sun,
+}
+
+impl LightKind {
+    fn next(self) -> Self {
+        match self {
+            Self::Point => Self::Spot,
+            Self::Spot => Self::Sun,
+            Self::Sun => Self::Point,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Point => "point",
+            Self::Spot => "spot",
+            Self::Sun => "sun",
+        }
+    }
+}
+
 #[derive(Resource)]
 struct Settings {
+    light: LightKind,
     soft_shadows: bool,
     taa: bool,
     light_radius: f32,
@@ -48,7 +85,13 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let env_flag = |name: &str| std::env::var(name).map_or(true, |value| value != "0");
+        let light = match std::env::var("SOFT_SHADOWS_LIGHT").as_deref() {
+            Ok("spot") => LightKind::Spot,
+            Ok("sun") => LightKind::Sun,
+            _ => LightKind::Point,
+        };
         Self {
+            light,
             soft_shadows: env_flag("SOFT_SHADOWS_PCSS"),
             taa: env_flag("SOFT_SHADOWS_TAA"),
             light_radius: std::env::var("SOFT_SHADOWS_RADIUS")
@@ -64,6 +107,10 @@ const AUTOSHOT_FRAME: u32 = 120;
 
 #[derive(Component)]
 struct HelpText;
+
+/// Marks the scene's one light, which is respawned when the light type changes.
+#[derive(Component)]
+struct SceneLight;
 
 fn main() {
     App::new()
@@ -134,19 +181,6 @@ fn setup(
     ));
 
     commands.spawn((
-        Name::new("Light"),
-        PointLight {
-            intensity: 2_000_000.0,
-            range: 30.0,
-            radius: Settings::default().light_radius,
-            shadow_maps_enabled: true,
-            soft_shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_translation(LIGHT_POSITION),
-    ));
-
-    commands.spawn((
         Name::new("Camera"),
         Camera3d::default(),
         Transform::from_xyz(3.5, 5.0, 6.5).looking_at(Vec3::new(0.3, 0.4, 0.0), Vec3::Y),
@@ -173,6 +207,9 @@ fn setup(
 }
 
 fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>) {
+    if keys.just_pressed(KeyCode::KeyL) {
+        settings.light = settings.light.next();
+    }
     if keys.just_pressed(KeyCode::Space) {
         settings.soft_shadows = !settings.soft_shadows;
     }
@@ -191,7 +228,7 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>)
 fn apply_settings(
     mut commands: Commands,
     settings: Res<Settings>,
-    mut lights: Query<&mut PointLight>,
+    lights: Query<Entity, With<SceneLight>>,
     mut cameras: Query<(Entity, &mut ShadowFilteringMethod)>,
     mut help: Single<&mut Text, With<HelpText>>,
 ) {
@@ -199,10 +236,11 @@ fn apply_settings(
         return;
     }
 
-    for mut light in &mut lights {
-        light.soft_shadows_enabled = settings.soft_shadows;
-        light.radius = settings.light_radius;
+    // Respawning the light is the simplest way to switch types and settings.
+    for light in &lights {
+        commands.entity(light).despawn();
     }
+    spawn_light(&mut commands, &settings);
 
     for (camera, mut filtering) in &mut cameras {
         if settings.taa {
@@ -217,15 +255,88 @@ fn apply_settings(
     }
 
     let on_off = |on: bool| if on { "on" } else { "off" };
+    let size = match settings.light {
+        LightKind::Sun => format!(
+            "{:.3} spread per meter",
+            settings.light_radius * SUN_SIZE_SCALE
+        ),
+        _ => format!("{:.2} m radius", settings.light_radius),
+    };
     help.0 = format!(
         "Soft shadows test (Bevy Extend PCSS)\n\
+         [L] Light: {}\n\
          [Space] Soft shadows: {}\n\
          [T] TAA + temporal filter: {}\n\
-         [ / ] Light radius: {:.2} m",
+         [ / ] Light size: {}",
+        settings.light.label(),
         on_off(settings.soft_shadows),
         on_off(settings.taa),
-        settings.light_radius,
+        size,
     );
+}
+
+fn spawn_light(commands: &mut Commands, settings: &Settings) {
+    let transform = Transform::from_translation(LIGHT_POSITION).looking_at(LIGHT_TARGET, Vec3::Y);
+    match settings.light {
+        LightKind::Point => {
+            commands.spawn((
+                Name::new("Point light"),
+                SceneLight,
+                PointLight {
+                    intensity: 2_000_000.0,
+                    range: 30.0,
+                    radius: settings.light_radius,
+                    shadow_maps_enabled: true,
+                    soft_shadows_enabled: settings.soft_shadows,
+                    ..default()
+                },
+                transform,
+            ));
+        }
+        LightKind::Spot => {
+            commands.spawn((
+                Name::new("Spot light"),
+                SceneLight,
+                SpotLight {
+                    intensity: 2_000_000.0,
+                    range: 30.0,
+                    radius: settings.light_radius,
+                    outer_angle: 1.0,
+                    inner_angle: 0.6,
+                    shadow_maps_enabled: true,
+                    soft_shadows_enabled: settings.soft_shadows,
+                    ..default()
+                },
+                transform,
+            ));
+        }
+        LightKind::Sun => {
+            // The sun comes from the side so its long shadows aren't hidden behind the objects
+            // from the starting camera angle.
+            let transform =
+                Transform::from_translation(SUN_POSITION).looking_at(LIGHT_TARGET, Vec3::Y);
+            commands.spawn((
+                Name::new("Sun"),
+                SceneLight,
+                DirectionalLight {
+                    illuminance: 10_000.0,
+                    shadow_maps_enabled: true,
+                    soft_shadow_size: settings
+                        .soft_shadows
+                        .then_some(settings.light_radius * SUN_SIZE_SCALE),
+                    ..default()
+                },
+                transform,
+                // The scene is small, so tight cascades give sharper contact shadows.
+                CascadeShadowConfigBuilder {
+                    first_cascade_far_bound: 6.0,
+                    maximum_distance: 25.0,
+                    ..default()
+                }
+                .build(),
+            ));
+        }
+    }
 }
 
 fn take_screenshots(

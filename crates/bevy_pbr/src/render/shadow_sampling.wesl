@@ -529,7 +529,9 @@ fn sample_shadow_cubemap(
     return 0.0;
 }
 
-// Bevy Extend: percentage-closer soft shadows (PCSS) for point lights.
+// Bevy Extend: percentage-closer soft shadows (PCSS) for point lights. The spot
+// and directional light versions live in `shadows.wesl` and reuse the helpers
+// below.
 //
 // The upstream version scaled the penumbra by `POINT_SHADOW_SCALE` (a constant
 // meant for one-texel PCF), so penumbras ended up roughly a hundred times
@@ -541,9 +543,9 @@ fn sample_shadow_cubemap(
 // that point's own depth, which keeps wide filters from shadowing the
 // receiver itself (shadow acne) on surfaces lit at a grazing angle.
 
-/// Number of samples in the PCSS blocker search for point lights.
+/// Number of samples in the PCSS blocker search.
 const POINT_PCSS_BLOCKER_SAMPLES: u32 = 16u;
-/// Number of samples in the PCSS filter for point lights.
+/// Number of samples in the PCSS filter.
 const POINT_PCSS_FILTER_SAMPLES: u32 = 32u;
 /// The golden angle in radians, used to build Vogel disks.
 const GOLDEN_ANGLE: f32 = 2.39996323;
@@ -563,6 +565,30 @@ fn pcss_is_temporal() -> bool {
     return true;
     @else
     return false;
+}
+
+/// Returns the per-pixel rotation of the PCSS sample pattern, which changes
+/// every frame when the temporal shadow filter is active.
+fn pcss_rotation(frag_coord_xy: vec2<f32>) -> f32 {
+    let frame = select(1u, view_bindings::globals.frame_count, pcss_is_temporal());
+    return 2.0 * PI * interleaved_gradient_noise(frag_coord_xy, frame);
+}
+
+/// Like [`project_onto_receiver_plane`], but for parallel light rays along
+/// `ray_direction` (directional lights). `position` and the result are world
+/// positions.
+fn project_onto_receiver_plane_parallel(
+    position: vec3<f32>,
+    offset: vec3<f32>,
+    normal: vec3<f32>,
+    ray_direction: vec3<f32>,
+) -> vec3<f32> {
+    let denominator = dot(normal, ray_direction);
+    if (abs(denominator) < 1e-3) {
+        return position + offset;
+    }
+    let t = clamp(-dot(normal, offset) / denominator, -4.0, 4.0);
+    return position + offset + t * ray_direction;
 }
 
 /// Converts a light-space position to the depth stored in a point light's
@@ -639,8 +665,7 @@ fn sample_shadow_cubemap_pcss(
     light_size: f32,
     frag_coord_xy: vec2<f32>,
 ) -> f32 {
-    let frame = select(1u, view_bindings::globals.frame_count, pcss_is_temporal());
-    let rotation = 2.0 * PI * interleaved_gradient_noise(frag_coord_xy, frame);
+    let rotation = pcss_rotation(frag_coord_xy);
 
     let z_blocker = search_for_blockers_in_shadow_cubemap(
         frag_ls, normal, light_custom_data, light_size, rotation, light_id);

@@ -2,8 +2,11 @@ import package::render::{
     mesh_view_types::POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE,
     mesh_view_bindings as view_bindings,
     shadow_sampling::{
-        SPOT_SHADOW_TEXEL_SIZE, sample_shadow_cubemap, sample_shadow_cubemap_pcss,
-        sample_shadow_map, sample_shadow_map_pcss,
+        SPOT_SHADOW_TEXEL_SIZE, POINT_SHADOW_SCALE, POINT_PCSS_BLOCKER_SAMPLES,
+        POINT_PCSS_FILTER_SAMPLES, sample_shadow_cubemap, sample_shadow_cubemap_pcss,
+        sample_shadow_map, sample_shadow_map_hardware, search_for_blockers_in_shadow_map_hardware,
+        vogel_disk_sample, pcss_rotation, project_onto_receiver_plane,
+        project_onto_receiver_plane_parallel,
     }
 };
 
@@ -114,13 +117,16 @@ fn fetch_spot_shadow(
     // If soft shadows are enabled, use the PCSS path.
     let array_index = i32(light_id) + view_bindings::lights.spot_light_shadowmap_offset;
     if ((*light).soft_shadow_size > 0.0) {
-        return sample_shadow_map_pcss(
-            shadow_uv,
+        return sample_spot_shadow_pcss(
+            offset_position,
+            surface_normal,
+            light_inv_rot,
+            (*light).spot_light_tan_angle,
+            near_z,
             depth,
             array_index,
-            frag_coord_xy,
-            SPOT_SHADOW_TEXEL_SIZE,
             (*light).soft_shadow_size,
+            frag_coord_xy,
         );
     }
 
@@ -131,6 +137,69 @@ fn fetch_spot_shadow(
         frag_coord_xy,
         SPOT_SHADOW_TEXEL_SIZE,
     );
+}
+
+// Bevy Extend: spot light percentage-closer soft shadows (PCSS), in world
+// units like the point light version in `shadow_sampling.wesl`.
+
+/// Projects a position relative to a spot light into its shadow map. Returns
+/// the shadow map uv in xy and the stored depth in z.
+fn spot_light_local(
+    light_relative: vec3<f32>,
+    light_inv_rot: mat3x3<f32>,
+    tan_angle: f32,
+    near_z: f32,
+) -> vec3<f32> {
+    let projected = light_relative * light_inv_rot;
+    let f_div_minus_z = 1.0 / (tan_angle * -projected.z);
+    let uv = projected.xy * f_div_minus_z * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    return vec3(uv, near_z / -projected.z);
+}
+
+/// Samples a spot light shadow with PCSS. `light_relative` is the biased
+/// fragment position relative to the light, and `light_size` the light's
+/// radius in world units.
+fn sample_spot_shadow_pcss(
+    light_relative: vec3<f32>,
+    normal: vec3<f32>,
+    light_inv_rot: mat3x3<f32>,
+    tan_angle: f32,
+    near_z: f32,
+    depth: f32,
+    array_index: i32,
+    light_size: f32,
+    frag_coord_xy: vec2<f32>,
+) -> f32 {
+    let rotation = pcss_rotation(frag_coord_xy);
+    let basis = orthonormalize(normalize(light_relative));
+
+    var blockers = vec2(0.0);
+    for (var i = 0u; i < POINT_PCSS_BLOCKER_SAMPLES; i += 1u) {
+        let disk = vogel_disk_sample(i, POINT_PCSS_BLOCKER_SAMPLES, rotation) * light_size;
+        let sample_relative = project_onto_receiver_plane(
+            light_relative, disk.x * basis[0] + disk.y * basis[1], normal);
+        let local = spot_light_local(sample_relative, light_inv_rot, tan_angle, near_z);
+        blockers += search_for_blockers_in_shadow_map_hardware(local.xy, local.z, array_index);
+    }
+    if (blockers.y == 0.0) {
+        return 1.0;
+    }
+    let z_blocker = blockers.x / blockers.y;
+
+    // Reverse-Z perspective depth is proportional to 1 / distance, so this is
+    // the classic `(receiver - blocker) / blocker` PCSS penumbra ratio.
+    let min_radius = POINT_SHADOW_SCALE * length(light_relative);
+    let penumbra_radius = max(light_size * (z_blocker / depth - 1.0), min_radius);
+
+    var sum = 0.0;
+    for (var i = 0u; i < POINT_PCSS_FILTER_SAMPLES; i += 1u) {
+        let disk = vogel_disk_sample(i, POINT_PCSS_FILTER_SAMPLES, rotation) * penumbra_radius;
+        let sample_relative = project_onto_receiver_plane(
+            light_relative, disk.x * basis[0] + disk.y * basis[1], normal);
+        let local = spot_light_local(sample_relative, light_inv_rot, tan_angle, near_z);
+        sum += sample_shadow_map_hardware(local.xy, local.z, array_index);
+    }
+    return sum / f32(POINT_PCSS_FILTER_SAMPLES);
 }
 
 fn get_cascade_index(light_id: u32, view_z: f32) -> u32 {
@@ -177,6 +246,84 @@ fn world_to_directional_light_local(
     return vec4(light_local, depth, 1.0);
 }
 
+/// Largest blocker search radius for directional light PCSS, in meters. Keeps
+/// the search from spreading 16 samples too thin far from the cascade's near
+/// plane.
+const DIRECTIONAL_PCSS_MAX_SEARCH_RADIUS: f32 = 2.0;
+
+/// Samples a directional light shadow cascade with PCSS (Bevy Extend).
+///
+/// `light_size` is how much the penumbra widens per meter between the blocker
+/// and the receiver: the tangent of the light's angular radius. The sun is
+/// about 0.005; larger values give softer, more stylized shadows.
+fn sample_directional_shadow_pcss(
+    light_id: u32,
+    cascade_index: u32,
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    depth: f32,
+    array_index: i32,
+    texel_size: f32,
+    light_size: f32,
+    frag_coord_xy: vec2<f32>,
+) -> f32 {
+    let light = &view_bindings::lights.directional_lights[light_id];
+    let clip_from_world = (*light).cascades[cascade_index].clip_from_world;
+    let ray_direction = (*light).direction_to_light.xyz;
+
+    // Orthographic depth is linear: this converts depth differences to meters.
+    let depth_per_meter = length(vec3(
+        clip_from_world[0].z, clip_from_world[1].z, clip_from_world[2].z));
+
+    let rotation = pcss_rotation(frag_coord_xy);
+    let basis = orthonormalize(ray_direction);
+
+    // Reverse-Z: the near plane is at depth 1, so this is the receiver's
+    // distance from the near plane, the furthest a blocker can be.
+    let search_radius = clamp(
+        light_size * (1.0 - depth) / depth_per_meter,
+        texel_size,
+        DIRECTIONAL_PCSS_MAX_SEARCH_RADIUS,
+    );
+
+    var blockers = vec2(0.0);
+    for (var i = 0u; i < POINT_PCSS_BLOCKER_SAMPLES; i += 1u) {
+        let disk = vogel_disk_sample(i, POINT_PCSS_BLOCKER_SAMPLES, rotation) * search_radius;
+        let sample_position = project_onto_receiver_plane_parallel(
+            position, disk.x * basis[0] + disk.y * basis[1], normal, ray_direction);
+        let local = world_to_directional_light_local(
+            light_id, cascade_index, vec4(sample_position, 1.0));
+        if (local.w != 0.0) {
+            blockers += search_for_blockers_in_shadow_map_hardware(
+                local.xy, local.z, array_index);
+        }
+    }
+    if (blockers.y == 0.0) {
+        return 1.0;
+    }
+    let z_blocker = blockers.x / blockers.y;
+
+    let penumbra_radius = max(
+        light_size * (z_blocker - depth) / depth_per_meter,
+        texel_size,
+    );
+
+    var sum = 0.0;
+    for (var i = 0u; i < POINT_PCSS_FILTER_SAMPLES; i += 1u) {
+        let disk = vogel_disk_sample(i, POINT_PCSS_FILTER_SAMPLES, rotation) * penumbra_radius;
+        let sample_position = project_onto_receiver_plane_parallel(
+            position, disk.x * basis[0] + disk.y * basis[1], normal, ray_direction);
+        let local = world_to_directional_light_local(
+            light_id, cascade_index, vec4(sample_position, 1.0));
+        if (local.w == 0.0) {
+            sum += 1.0;
+        } else {
+            sum += sample_shadow_map_hardware(local.xy, local.z, array_index);
+        }
+    }
+    return sum / f32(POINT_PCSS_FILTER_SAMPLES);
+}
+
 fn sample_directional_cascade(
     light_id: u32,
     cascade_index: u32,
@@ -202,13 +349,16 @@ fn sample_directional_cascade(
 
     // If soft shadows are enabled, use the PCSS path.
     if ((*light).soft_shadow_size > 0.0) {
-        return sample_shadow_map_pcss(
-            light_local.xy,
+        return sample_directional_shadow_pcss(
+            light_id,
+            cascade_index,
+            offset_position.xyz,
+            surface_normal,
             light_local.z,
             array_index,
-            frag_coord_xy,
             texel_size,
             (*light).soft_shadow_size,
+            frag_coord_xy,
         );
     }
 
