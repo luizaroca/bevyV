@@ -15,6 +15,7 @@
 //! - [`level`]: saving and opening level files.
 //! - [`primitives`]: basic shapes that can be saved in a level.
 //! - [`details`]: the Details panel's component order.
+//! - [`world_settings`]: level-wide rendering options such as SSAO and SSGI.
 
 pub mod details;
 pub mod history;
@@ -25,6 +26,7 @@ pub mod primitives;
 pub mod selection;
 pub mod shortcuts;
 pub mod viewport;
+pub mod world_settings;
 
 use bevy::{
     dev_tools::infinite_grid::InfiniteGridPlugin,
@@ -77,6 +79,7 @@ impl Plugin for EditorPlugin {
             level::LevelPlugin,
             primitives::PrimitivesPlugin,
             details::DetailsPlugin,
+            world_settings::WorldSettingsPlugin,
         ))
         .register_type::<LevelEntity>()
         .register_type::<EditorEntity>()

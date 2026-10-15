@@ -3,7 +3,7 @@
 //! ```text
 //! +--------------------------------------------------------------+
 //! | File  Edit  Play  Help                          (menu bar)   |
-//! | [Select][Move][Rotate][Scale] [Local] [Snap]  [Play][Stop]   |
+//! | [Select][Move][Rotate][Scale] [Local] [Snap] [World Settings] [Play][Stop] |
 //! +-----------------------------------------+--------------------+
 //! |                                         | Outliner           |
 //! |               Viewport                  +--------------------+
@@ -40,7 +40,7 @@ use crate::{
     selection::GizmoVisible,
     shortcuts,
     viewport::{self, EditorCamera, EditorViewportArea},
-    EditorEntity,
+    world_settings, EditorEntity,
 };
 
 /// A toolbar button that switches the gizmo mode. `None` is Unreal's Select mode.
@@ -222,6 +222,13 @@ fn toolbar() -> impl Scene {
                 settings.snap_translate = on.then_some(SNAP.0);
                 settings.snap_rotate = on.then_some(SNAP.1.to_radians());
                 settings.snap_scale = on.then_some(SNAP.2);
+            })
+            --
+            @pane_header_divider()
+            --
+            @FeathersToolButton { @caption: bsn! { @caption("World Settings") } }
+            on(|_: On<Activate>, mut commands: Commands| {
+                commands.queue(world_settings::select_world_settings);
             })
             --
             @flex_spacer()

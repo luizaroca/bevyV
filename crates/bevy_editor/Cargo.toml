@@ -18,6 +18,8 @@ bevy = { path = "../..", features = [
 # Native file and message dialogs for Save/Open.
 rfd = "0.15"
 ron = "0.12"
+# Fork rendering features (SSGI) for World Settings.
+bevy_extend = { path = "../bevy_extend" }
 serde = "1"
 
 
