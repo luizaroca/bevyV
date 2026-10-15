@@ -3,7 +3,7 @@
 //! ```text
 //! +--------------------------------------------------------------+
 //! | File  Edit  Play  Help                          (menu bar)   |
-//! | [Select][Move][Rotate][Scale] [Local] [Snap] [World Settings] [Play][Stop] |
+//! | [Create v] [Select][Move][Rotate][Scale] [Local] [Snap] [World Settings] [Play][Stop] |
 //! +-----------------------------------------+--------------------+
 //! |                                         | Outliner           |
 //! |               Viewport                  +--------------------+
@@ -34,6 +34,7 @@ use bevy::{
 };
 
 use crate::{
+    create::{self, ActorKind},
     history::{self, History},
     level,
     play::{self, EditorMode},
@@ -170,6 +171,55 @@ const SHORTCUT_HELP: &str = "Viewport: RMB+mouse look, RMB+WASD/QE fly, RMB+whee
     Tools: Q select, W move, E rotate, R scale, Space cycle, Ctrl+` local/world. \
     Edit: Ctrl+Z undo, Ctrl+Y redo, Del delete.     File: Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as. Play: Alt+P play/stop, Esc stop.";
 
+/// One Create menu entry.
+fn create_item(kind: ActorKind) -> impl Scene {
+    bsn! {
+        @FeathersMenuItem { @caption: bsn! { @caption({kind.label()}) } }
+        on(move |_: On<Activate>, mut commands: Commands| {
+            commands.queue(move |world: &mut World| {
+                create::create_actor(world, kind);
+            });
+        })
+    }
+}
+
+/// The toolbar's Create menu: lights, then basic shapes.
+fn create_menu() -> impl Scene {
+    let [point, spot, sun] = ActorKind::LIGHTS;
+    let [cube, sphere, cylinder, cone, plane, capsule, torus] = ActorKind::SHAPES;
+    bsn! {
+        @FeathersMenu
+        Children [
+            @FeathersMenuButton { @caption: bsn! { @caption("+ Create") } }
+            --
+            @FeathersMenuPopup
+            Children [
+                @create_item(point)
+                --
+                @create_item(spot)
+                --
+                @create_item(sun)
+                --
+                @FeathersMenuDivider
+                --
+                @create_item(cube)
+                --
+                @create_item(sphere)
+                --
+                @create_item(cylinder)
+                --
+                @create_item(cone)
+                --
+                @create_item(plane)
+                --
+                @create_item(capsule)
+                --
+                @create_item(torus)
+            ]
+        ]
+    }
+}
+
 fn toolbar() -> impl Scene {
     bsn! {
         Node {
@@ -181,6 +231,10 @@ fn toolbar() -> impl Scene {
         }
         ThemeBackgroundColor(tokens::WINDOW_BG)
         Children [
+            @create_menu()
+            --
+            @pane_header_divider()
+            --
             @FeathersToolButton { @caption: bsn! { @caption("Select") } }
             ModeButton({None})
             on(|_: On<Activate>, mut commands: Commands| commands.queue(shortcuts::set_select_mode))
