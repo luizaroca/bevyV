@@ -98,6 +98,7 @@ fn computed_components() -> HashSet<TypeId> {
         TypeId::of::<VisibleMeshEntities>(),
         TypeId::of::<CubemapVisibleEntities>(),
         TypeId::of::<CascadesVisibleEntities>(),
+        TypeId::of::<bevy::light::Cascades>(),
         TypeId::of::<Mesh3d>(),
         TypeId::of::<MeshMaterial3d<StandardMaterial>>(),
         TypeId::of::<TransformGizmoFocus>(),

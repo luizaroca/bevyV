@@ -38,6 +38,19 @@ Updated at the end of every work session. Newest session first.
 
 ---
 
+## Session 2026-10-15
+
+**Branch:** `editor/soft-shadows` (off `editor/foundation`, which now has main's soft shadows merged in).
+
+**Done**
+- Turned on `experimental_pbr_pcss` for the editor, so lights' soft shadow settings work.
+- `cargo run -p bevy_editor -- <level file>` opens that level at startup.
+- Test level `assets/levels/soft_shadows.level.ron`: box, cylinder, sphere, a point light (on),
+  and a spot light and sun (hidden; set Visibility to switch).
+- Levels no longer save the sun's computed `Cascades`.
+
+---
+
 ## Session 2026-10-13
 
 **Branch:** `editor/foundation` (latest commit pushed to the fork).

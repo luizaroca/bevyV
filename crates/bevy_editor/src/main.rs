@@ -1,7 +1,8 @@
-//! Runs the editor on a small demo level.
+//! Runs the editor on a small demo level, or on a level file given on the command line.
 //!
 //! ```bash
 //! cargo run -p bevy_editor
+//! cargo run -p bevy_editor -- assets/levels/soft_shadows.level.ron
 //! ```
 
 use bevy::{
@@ -27,10 +28,31 @@ fn main() {
         }))
         .add_plugins(EditorPlugin)
         .register_type::<Spin>()
-        .add_systems(Startup, demo_level)
+        .add_systems(
+            Startup,
+            (
+                demo_level.run_if(|| level_from_args().is_none()),
+                open_level_from_args.run_if(|| level_from_args().is_some()),
+            ),
+        )
         .add_systems(Update, spin.run_if(in_play_mode))
         .add_systems(Update, screenshot_and_exit)
         .run();
+}
+
+/// The level file passed on the command line, if any.
+fn level_from_args() -> Option<std::path::PathBuf> {
+    std::env::args_os().nth(1).map(std::path::PathBuf::from)
+}
+
+/// Opens the level file passed on the command line.
+fn open_level_from_args(world: &mut World) {
+    let Some(path) = level_from_args() else {
+        return;
+    };
+    if let Err(error) = bevy_editor::level::load_level_from(world, &path) {
+        error!("Could not open {}: {error}", path.display());
+    }
 }
 
 /// When `BEVY_EDITOR_SCREENSHOT` is set to a file path, saves a screenshot there after a few

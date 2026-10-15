@@ -13,6 +13,7 @@ bevy = { path = "../..", features = [
   "render_dev_tools",
   "debug",
   "serialize",
+  "experimental_pbr_pcss",
 ] }
 # Native file and message dialogs for Save/Open.
 rfd = "0.15"
