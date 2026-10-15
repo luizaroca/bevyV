@@ -46,7 +46,8 @@ Updated at the end of every work session. Newest session first.
 - Turned on `experimental_pbr_pcss` for the editor, so lights' soft shadow settings work.
 - `cargo run -p bevy_editor -- <level file>` opens that level at startup.
 - Test levels `assets/levels/soft_shadows_{point,spot,sun}.level.ron`: box, cylinder, sphere and
-  one light each (File > Open to switch). A single level with hidden lights confused testing.
+  one light each (File > Open to switch), plus `soft_shadows_all` with all three on, tinted
+  (warm point, blue spot, white sun) so each light's shadows can be told apart. A single level with hidden lights confused testing.
 - Colors are editable in the Details panel as hex codes (`#RRGGBB` or `#RRGGBBAA`), for `Color`,
   `Srgba` and `LinearRgba` fields. Change to `bevy_inspector`.
 - Levels no longer save the sun's computed `Cascades`.
