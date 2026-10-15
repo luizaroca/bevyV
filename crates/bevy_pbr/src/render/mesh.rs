@@ -367,7 +367,7 @@ pub fn check_views_need_specialization(
         &Msaa,
         (Option<&Tonemapping>, Option<&DebandDither>),
         Option<&ShadowFilteringMethod>,
-        Has<ScreenSpaceAmbientOcclusion>,
+        Option<&ScreenSpaceAmbientOcclusion>,
         (
             Has<NormalPrepass>,
             Has<DepthPrepass>,
@@ -493,8 +493,11 @@ pub fn check_views_need_specialization(
                 view_key |= MeshPipelineKey::DEBAND_DITHER;
             }
         }
-        if ssao {
+        if let Some(ssao) = ssao {
             view_key |= MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION;
+            if ssao.direct_light {
+                view_key |= MeshPipelineKey::SSAO_DIRECT_LIGHT;
+            }
         }
         if has_screen_space_indirect_light {
             view_key |= MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT;
@@ -3133,7 +3136,8 @@ bitflags::bitflags! {
         const PREPASS_READS_MATERIAL            = 1 << 23;
         const CONTACT_SHADOWS                   = 1 << 24;
         const SCREEN_SPACE_INDIRECT_LIGHT       = 1 << 25; // Bevy Extend fork: see `ScreenSpaceIndirectLight`
-        const LAST_FLAG                         = Self::SCREEN_SPACE_INDIRECT_LIGHT.bits();
+        const SSAO_DIRECT_LIGHT                 = 1 << 26; // Bevy Extend fork: see `ScreenSpaceAmbientOcclusion::direct_light`
+        const LAST_FLAG                         = Self::SSAO_DIRECT_LIGHT.bits();
 
         const ALL_PREPASS_BITS                  = Self::DEPTH_PREPASS.bits()
                                                 | Self::NORMAL_PREPASS.bits()
@@ -3591,6 +3595,9 @@ impl SpecializedMeshPipeline for MeshPipeline {
         // Transparent meshes don't contribute to the depth prepass, so SSAO should not be applied.
         if key.contains(MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION) && depth_write_enabled {
             shader_defs.push("SCREEN_SPACE_AMBIENT_OCCLUSION".into());
+            if key.contains(MeshPipelineKey::SSAO_DIRECT_LIGHT) {
+                shader_defs.push("SSAO_DIRECT_LIGHT".into());
+            }
         }
         // Same for screen-space indirect light (Bevy Extend fork).
         if key.contains(MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT) && depth_write_enabled {
