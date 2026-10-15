@@ -60,12 +60,14 @@ fn open_level_from_args(world: &mut World) {
 /// seconds and exits. Used to check the editor's layout without a person at the screen.
 /// `BEVY_EDITOR_SELECT` can name an entity to select first, and `BEVY_EDITOR_ROUNDTRIP` can name
 /// a level file to save to and reopen first. `BEVY_EDITOR_CREATE` can list Create menu entries to
-/// add first, separated by commas, such as `Cube,Point Light`.
+/// add first, separated by commas, such as `Cube,Point Light`. `BEVY_EDITOR_DELETE` can list
+/// entities to delete, as the Delete key does.
 fn screenshot_and_exit(
     time: Res<Time>,
     mut taken: Local<bool>,
     mut round_tripped: Local<bool>,
     mut created: Local<bool>,
+    mut deleted: Local<bool>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     names: Query<(Entity, &Name)>,
@@ -108,6 +110,20 @@ fn screenshot_and_exit(
         && let Some((entity, _)) = names.iter().find(|(_, name)| name.as_str() == target)
     {
         selection.0 = Some(entity);
+    }
+    if !*deleted
+        && elapsed > 2.5
+        && let Ok(list) = std::env::var("BEVY_EDITOR_DELETE")
+    {
+        *deleted = true;
+        for target in list.split(',') {
+            if let Some((entity, _)) = names.iter().find(|(_, name)| name.as_str() == target) {
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<InspectorSelection>().0 = Some(entity);
+                    bevy_editor::shortcuts::delete_selection(world);
+                });
+            }
+        }
     }
     if !*taken && elapsed > 4.0 {
         *taken = true;

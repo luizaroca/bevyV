@@ -441,6 +441,25 @@ pub fn extract_lights(
         &mut RenderExtractedShadowMapVisibleEntities,
         &mut RenderShadowMapVisibleEntities,
     )>,
+    main_world_lights: Extract<
+        Query<
+            (),
+            Or<(
+                With<PointLight>,
+                With<SpotLight>,
+                With<DirectionalLight>,
+                With<RectLight>,
+            )>,
+        >,
+    >,
+    extracted_lights: Query<
+        (Entity, &MainEntity),
+        Or<(
+            With<ExtractedPointLight>,
+            With<ExtractedDirectionalLight>,
+            With<ExtractedRectLight>,
+        )>,
+    >,
     mut all_lights_found: Local<EntityHashSet>,
     mut rect_light_missing_luts_warning_emitted: Local<bool>,
     system_change_tick: SystemChangeTick,
@@ -933,6 +952,22 @@ pub fn extract_lights(
             MainEntity::from(main_entity),
             maybe_render_layers.unwrap_or_default().clone(),
         ));
+    }
+
+    // Lights that were disabled, or lost their light component, no longer match the queries
+    // above, so their extracted data would linger and keep lighting the scene and rendering
+    // shadow views. Remove it, as for lights that became invisible.
+    for (render_entity, main_entity) in &extracted_lights {
+        if main_world_lights.contains(main_entity.id()) {
+            continue;
+        }
+        if let Ok(mut entity_commands) = commands.get_entity(render_entity) {
+            entity_commands.remove::<(
+                ExtractedPointLight,
+                ExtractedDirectionalLight,
+                ExtractedRectLight,
+            )>();
+        }
     }
 
     // Clear out any shadow maps that correspond to lights that have become

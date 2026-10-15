@@ -11,6 +11,7 @@ use bevy_dev_tools::inspection::label_resolution::{
 use bevy_ecs::{
     component::{Component, ComponentId, ComponentInfo},
     entity::Entity,
+    entity_disabling::DefaultQueryFilters,
     hierarchy::{ChildOf, Children},
     observer::{Observer, On},
     query::With,
@@ -439,6 +440,14 @@ fn is_excluded(world: &World, entity: Entity) -> bool {
     {
         return true;
     }
+    // Disabled entities (such as ones deleted in an editor and kept for undo) are hidden, the way
+    // queries skip them.
+    if world
+        .get_resource::<DefaultQueryFilters>()
+        .is_some_and(|filters| filters.disabling_ids().any(|id| entity_ref.contains_id(id)))
+    {
+        return true;
+    }
 
     let mut current = entity;
     while let Some(child_of) = world.get::<ChildOf>(current) {
@@ -581,6 +590,23 @@ mod tests {
         assert!(!is_excluded(&world, panel));
         assert!(is_excluded(&world, inner));
         assert!(!is_excluded(&world, subject));
+    }
+
+    #[test]
+    fn hides_disabled_entities() {
+        let mut world = World::new();
+        let subject = world.spawn_empty().id();
+        let child = world.spawn(ChildOf(subject)).id();
+        assert!(!is_excluded(&world, subject));
+
+        world
+            .entity_mut(subject)
+            .insert(bevy_ecs::entity_disabling::Disabled);
+        world
+            .entity_mut(child)
+            .insert(bevy_ecs::entity_disabling::Disabled);
+        assert!(is_excluded(&world, subject));
+        assert!(is_excluded(&world, child));
     }
 
     #[test]
