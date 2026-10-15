@@ -1,4 +1,4 @@
-//! Screen-space global illumination, phase 2: the raw trace.
+//! Screen-space global illumination, the raw trace.
 //!
 //! Screen Space Indirect Lighting with Visibility Bitmask (Therrien, Levesque and Gilet 2023,
 //! https://arxiv.org/abs/2301.11376), the same paper Bevy's SSAO (`bevy_pbr/src/ssao/ssao.wesl`)
@@ -10,12 +10,17 @@
 //! Output: rgb is the diffuse bounce light arriving at the pixel (multiply by albedo to light a
 //! surface), a is the fraction of the hemisphere left open (ambient occlusion).
 //! Everything is in the same units as the lit image, which already includes exposure.
+//!
+//! At half resolution each thread traces one pixel of a 2x2 block, a different one every frame,
+//! and also stores that pixel's distance so `temporal.wesl` can upsample without bleeding across
+//! edges. The output is raw and noisy; `temporal.wesl` and `spatial.wesl` clean it up.
 
 import bevy_render::{
     view::View,
     maths::{PI, HALF_PI, fast_acos},
 };
 
+// Keep in sync with `temporal.wesl`, `spatial.wesl` and `SsgiSettingsUniform`.
 struct SsgiSettings {
     intensity: f32,
     radius: f32,
@@ -23,6 +28,9 @@ struct SsgiSettings {
     slice_count: u32,
     samples_per_slice_side: u32,
     frame: u32,
+    half_resolution: u32,
+    denoise: u32,
+    max_history_frames: u32,
 }
 
 @group(0) @binding(0) var depth_texture: texture_depth_2d;
@@ -30,8 +38,9 @@ struct SsgiSettings {
 @group(0) @binding(2) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(3) var history: texture_2d<f32>;
 @group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(5) var<uniform> view: View;
-@group(0) @binding(6) var<uniform> settings: SsgiSettings;
+@group(0) @binding(5) var output_depth: texture_storage_2d<r32float, write>;
+@group(0) @binding(6) var<uniform> view: View;
+@group(0) @binding(7) var<uniform> settings: SsgiSettings;
 
 /// Sectors per slice in the visibility bitmask.
 const SECTOR_COUNT: u32 = 32u;
@@ -89,20 +98,35 @@ fn random_pair(pixel: vec2<i32>) -> vec2<f32> {
 @compute
 @workgroup_size(8, 8, 1)
 fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let pixel = vec2<i32>(global_id.xy) + vec2<i32>(view.viewport.xy);
-    if (any(vec2<f32>(global_id.xy) >= view.viewport.zw)) {
+    // Output texel, relative to the viewport (half size at half resolution).
+    let out_texel = vec2<i32>(global_id.xy);
+    let half_resolution = settings.half_resolution != 0u;
+    let viewport_size = vec2<i32>(view.viewport.zw);
+    var local_pixel = out_texel;
+    if (half_resolution) {
+        // Visit the four pixels of each 2x2 block in turn over four frames.
+        var offsets = array(vec2(0, 0), vec2(1, 1), vec2(1, 0), vec2(0, 1));
+        local_pixel = 2 * out_texel + offsets[settings.frame % 4u];
+        if (any(2 * out_texel >= viewport_size)) {
+            return;
+        }
+        local_pixel = min(local_pixel, viewport_size - 1);
+    } else if (any(out_texel >= viewport_size)) {
         return;
     }
+    let pixel = local_pixel + vec2<i32>(view.viewport.xy);
 
     let depth = textureLoad(depth_texture, pixel, 0);
     if (depth == 0.0) {
         // Nothing drawn here (sky): no bounce light and nothing blocked.
-        textureStore(output, pixel, vec4(0.0, 0.0, 0.0, 1.0));
+        textureStore(output, out_texel, vec4(0.0, 0.0, 0.0, 1.0));
+        textureStore(output_depth, out_texel, vec4(0.0));
         return;
     }
 
     let uv = pixel_to_uv(pixel);
     let position = reconstruct_view_space_position(depth, uv);
+    textureStore(output_depth, out_texel, vec4(-position.z, 0.0, 0.0, 0.0));
     let normal = load_normal_view_space(pixel);
     let view_vec = normalize(-position);
 
@@ -191,5 +215,5 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let visibility = 1.0 - f32(occluded_sectors) / (slice_count * f32(SECTOR_COUNT));
-    textureStore(output, pixel, vec4(settings.intensity * bounce_light / slice_count, visibility));
+    textureStore(output, out_texel, vec4(settings.intensity * bounce_light / slice_count, visibility));
 }
