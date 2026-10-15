@@ -17,8 +17,10 @@ import package::{
 
 @if(SCREEN_SPACE_AMBIENT_OCCLUSION)
 import package::render::mesh_view_bindings::screen_space_ambient_occlusion_texture;
-@if(SCREEN_SPACE_AMBIENT_OCCLUSION)
+@if(SCREEN_SPACE_AMBIENT_OCCLUSION || SCREEN_SPACE_INDIRECT_LIGHT)
 import package::ssao::utils::ssao_multibounce;
+@if(SCREEN_SPACE_INDIRECT_LIGHT)
+import package::render::mesh_view_bindings::screen_space_indirect_light_texture;
 
 @if(MESHLET_MESH_MATERIAL_PASS)
 import package::meshlet::visibility_buffer_resolve::VertexOutput;
@@ -543,6 +545,11 @@ pbr_input.material.uv_transform = uv_transform;
         // Lagarde and Rousiers 2014, "Moving Frostbite to Physically Based Rendering"
         let roughness = lighting::perceptualRoughnessToRoughness(pbr_input.material.perceptual_roughness);
         specular_occlusion = saturate(pow(NdotV + ssao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ssao);
+}
+@if(SCREEN_SPACE_INDIRECT_LIGHT) {
+        // Ambient occlusion from screen-space indirect light (Bevy Extend fork), used like SSAO.
+        let ssil_visibility = textureLoad(screen_space_indirect_light_texture, vec2<i32>(in.position.xy), 0i).a;
+        diffuse_occlusion = min(diffuse_occlusion, ssao_multibounce(ssil_visibility, pbr_input.material.base_color.rgb));
 }
         pbr_input.diffuse_occlusion = diffuse_occlusion;
         pbr_input.specular_occlusion = specular_occlusion;

@@ -694,6 +694,18 @@ fn apply_pbr_lighting(
     var indirect_light = vec3(0.0f);
     var found_diffuse_indirect = false;
 
+    // Screen-space bounce light (Bevy Extend fork). It only covers nearby surfaces on screen, so
+    // the sources below still add the rest, dimmed by its ambient occlusion.
+@if(SCREEN_SPACE_INDIRECT_LIGHT) {
+    let screen_space_indirect = textureLoad(
+        view_bindings::screen_space_indirect_light_texture,
+        vec2<i32>(in.frag_coord.xy),
+        0i
+    ).rgb;
+    // The texture already has exposure applied; it is applied again below.
+    indirect_light += screen_space_indirect / view_bindings::view.exposure * diffuse_color;
+}
+
 @if(LIGHTMAP) {
     indirect_light += in.lightmap_light * diffuse_color;
     found_diffuse_indirect = true;

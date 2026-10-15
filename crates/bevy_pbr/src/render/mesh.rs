@@ -1,4 +1,5 @@
 use crate::contact_shadows::ContactShadows;
+use crate::ScreenSpaceIndirectLight;
 use crate::{resources::prepare_atmosphere_buffers, skin::skin_uniforms_from_world};
 use alloc::sync::Arc;
 use bevy_asset::uuid::Uuid;
@@ -387,6 +388,7 @@ pub fn check_views_need_specialization(
             Has<ScreenSpaceReflectionsUniform>,
             Has<ContactShadows>,
         ),
+        Has<ScreenSpaceIndirectLight>,
     )>,
     mut seen_views: Local<HashSet<RetainedViewEntity>>,
 ) {
@@ -406,6 +408,7 @@ pub fn check_views_need_specialization(
         distance_fog,
         (has_environment_maps, has_irradiance_volumes),
         (has_oit, has_atmosphere, has_ssr, has_contact_shadows),
+        has_screen_space_indirect_light,
     ) in views.iter_mut()
     {
         seen_views.insert(view.retained_view_entity);
@@ -492,6 +495,9 @@ pub fn check_views_need_specialization(
         }
         if ssao {
             view_key |= MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION;
+        }
+        if has_screen_space_indirect_light {
+            view_key |= MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT;
         }
         if distance_fog {
             view_key |= MeshPipelineKey::DISTANCE_FOG;
@@ -3126,7 +3132,8 @@ bitflags::bitflags! {
         const INVERT_CULLING                    = 1 << 22;
         const PREPASS_READS_MATERIAL            = 1 << 23;
         const CONTACT_SHADOWS                   = 1 << 24;
-        const LAST_FLAG                         = Self::CONTACT_SHADOWS.bits();
+        const SCREEN_SPACE_INDIRECT_LIGHT       = 1 << 25; // Bevy Extend fork: see `ScreenSpaceIndirectLight`
+        const LAST_FLAG                         = Self::SCREEN_SPACE_INDIRECT_LIGHT.bits();
 
         const ALL_PREPASS_BITS                  = Self::DEPTH_PREPASS.bits()
                                                 | Self::NORMAL_PREPASS.bits()
@@ -3584,6 +3591,10 @@ impl SpecializedMeshPipeline for MeshPipeline {
         // Transparent meshes don't contribute to the depth prepass, so SSAO should not be applied.
         if key.contains(MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION) && depth_write_enabled {
             shader_defs.push("SCREEN_SPACE_AMBIENT_OCCLUSION".into());
+        }
+        // Same for screen-space indirect light (Bevy Extend fork).
+        if key.contains(MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT) && depth_write_enabled {
+            shader_defs.push("SCREEN_SPACE_INDIRECT_LIGHT".into());
         }
 
         if key.contains(MeshPipelineKey::MOTION_VECTOR_PREPASS) {

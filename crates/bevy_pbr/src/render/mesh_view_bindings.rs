@@ -55,9 +55,9 @@ use crate::{
     Bluenoise, ExtractedAtmosphere, FogMeta, GlobalClusterableObjectMeta, GpuClusteredLights,
     GpuFog, GpuLights, LightMeta, LightProbesBuffer, LightProbesUniform, MeshPipeline,
     MeshPipelineKey, RenderViewLightProbes, ScreenSpaceAmbientOcclusionResources,
-    ScreenSpaceReflectionsBuffer, ScreenSpaceReflectionsUniform, ShadowSamplers,
-    ViewClusterBindings, ViewShadowBindings, ViewTransmissionTexture,
-    CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT,
+    ScreenSpaceIndirectLight, ScreenSpaceIndirectLightTexture, ScreenSpaceReflectionsBuffer,
+    ScreenSpaceReflectionsUniform, ShadowSamplers, ViewClusterBindings, ViewShadowBindings,
+    ViewTransmissionTexture, CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT,
 };
 
 #[cfg(all(feature = "webgl", target_arch = "wasm32", not(feature = "webgpu")))]
@@ -98,6 +98,7 @@ bitflags::bitflags! {
         const DISTANCE_FOG                     = 1 << 14;
         const AREA_LIGHT_LUTS                  = 1 << 15;
         const VIEW_TRANSMISSION_TEXTURE        = 1 << 16;
+        const SCREEN_SPACE_INDIRECT_LIGHT      = 1 << 17; // Bevy Extend fork
     }
 }
 
@@ -165,6 +166,9 @@ impl From<MeshPipelineKey> for MeshPipelineViewLayoutKey {
         }
         if value.contains(MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION) {
             result |= MeshPipelineViewLayoutKey::SCREEN_SPACE_AMBIENT_OCCLUSION;
+        }
+        if value.contains(MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT) {
+            result |= MeshPipelineViewLayoutKey::SCREEN_SPACE_INDIRECT_LIGHT;
         }
         if value.contains(MeshPipelineKey::IRRADIANCE_VOLUME) {
             result |= MeshPipelineViewLayoutKey::IRRADIANCE_VOLUME;
@@ -391,6 +395,15 @@ fn layout_entries(
             // Screen space ambient occlusion texture
             (
                 17,
+                texture_2d(TextureSampleType::Float { filterable: false }),
+            ),
+        ));
+    }
+    if layout_key.contains(MeshPipelineViewLayoutKey::SCREEN_SPACE_INDIRECT_LIGHT) {
+        entries = entries.extend_with_indices((
+            // Screen space indirect light texture (Bevy Extend fork)
+            (
+                39,
                 texture_2d(TextureSampleType::Float { filterable: false }),
             ),
         ));
@@ -659,7 +672,11 @@ pub fn prepare_mesh_view_bind_groups(
         &ViewShadowBindings,
         &ViewClusterBindings,
         &Msaa,
-        Option<&ScreenSpaceAmbientOcclusionResources>,
+        (
+            Option<&ScreenSpaceAmbientOcclusionResources>,
+            Has<ScreenSpaceIndirectLight>,
+            Option<&ScreenSpaceIndirectLightTexture>,
+        ),
         Option<&ViewPrepassTextures>,
         Option<&ViewTransmissionTexture>,
         Option<&AtmosphereTextures>,
@@ -732,7 +749,7 @@ pub fn prepare_mesh_view_bind_groups(
             shadow_bindings,
             cluster_bindings,
             msaa,
-            ssao_resources,
+            (ssao_resources, has_indirect_light, indirect_light_texture),
             prepass_textures,
             transmission_texture,
             atmosphere_textures,
@@ -872,6 +889,14 @@ pub fn prepare_mesh_view_bind_groups(
                     .screen_space_ambient_occlusion_texture
                     .default_view;
                 entries = entries.extend_with_indices(((17, ssao_view),));
+            }
+
+            if has_indirect_light {
+                layout_key |= MeshPipelineViewLayoutKey::SCREEN_SPACE_INDIRECT_LIGHT;
+                let indirect_light_view = indirect_light_texture
+                    .map(|texture| &texture.0)
+                    .unwrap_or(&fallback_image_zero.texture_view);
+                entries = entries.extend_with_indices(((39, indirect_light_view),));
             }
 
             if has_transmission {

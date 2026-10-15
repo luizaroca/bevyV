@@ -17,6 +17,7 @@ import bevy_render::{
 };
 
 struct SsgiSettings {
+    intensity: f32,
     radius: f32,
     thickness: f32,
     slice_count: u32,
@@ -190,5 +191,5 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let visibility = 1.0 - f32(occluded_sectors) / (slice_count * f32(SECTOR_COUNT));
-    textureStore(output, pixel, vec4(bounce_light / slice_count, visibility));
+    textureStore(output, pixel, vec4(settings.intensity * bounce_light / slice_count, visibility));
 }

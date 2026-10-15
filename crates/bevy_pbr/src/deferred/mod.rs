@@ -253,6 +253,9 @@ impl SpecializedRenderPipeline for DeferredLightingLayout {
         if key.contains(MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION) {
             shader_defs.push("SCREEN_SPACE_AMBIENT_OCCLUSION".into());
         }
+        if key.contains(MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT) {
+            shader_defs.push("SCREEN_SPACE_INDIRECT_LIGHT".into());
+        }
 
         if key.contains(MeshPipelineKey::ENVIRONMENT_MAP) {
             shader_defs.push("ENVIRONMENT_MAP".into());
