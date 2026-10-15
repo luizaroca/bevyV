@@ -8,6 +8,7 @@ Updated at the end of every work session. Newest session first.
   on `bevyengine/bevy`; `upstream` is fetch-only (its push URL is disabled locally).
 - Unreal Engine is the benchmark (the owner has 15+ years of UE experience). Viewport Alt
   navigation follows Maya.
+- Start new work on a fresh branch off `main`; all earlier editor branches are merged and deleted.
 - Prefer new code in `crates/bevy_editor`. Keep changes to Bevy's own crates small and listed
   below, so pulling in upstream stays easy.
 
@@ -40,7 +41,7 @@ Updated at the end of every work session. Newest session first.
 
 ## Session 2026-10-15
 
-**Branch:** `editor/soft-shadows` (off `editor/foundation`, which now has main's soft shadows merged in).
+**Branch:** `editor/soft-shadows`, merged into `main` as v0.2.1 (PR #5) and since deleted.
 
 **Done**
 - Turned on `experimental_pbr_pcss` for the editor, so lights' soft shadow settings work.
@@ -56,7 +57,7 @@ Updated at the end of every work session. Newest session first.
 
 ## Session 2026-10-13
 
-**Branch:** `editor/foundation` (latest commit pushed to the fork).
+**Branch:** `editor/foundation`, merged into `main` with v0.2.1 and since deleted.
 
 **Done**
 - Cloned the fork to `F:\BevyV`, added `upstream` (fetch-only).
