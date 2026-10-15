@@ -11,6 +11,7 @@ use bevy::{
     render::view::screenshot::{save_to_disk, Screenshot},
 };
 use bevy_editor::{
+    create::ActorKind,
     play::in_play_mode,
     primitives::{Primitive, PrimitiveMaterial},
     EditorPlugin, LevelEntity,
@@ -58,11 +59,13 @@ fn open_level_from_args(world: &mut World) {
 /// When `BEVY_EDITOR_SCREENSHOT` is set to a file path, saves a screenshot there after a few
 /// seconds and exits. Used to check the editor's layout without a person at the screen.
 /// `BEVY_EDITOR_SELECT` can name an entity to select first, and `BEVY_EDITOR_ROUNDTRIP` can name
-/// a level file to save to and reopen first.
+/// a level file to save to and reopen first. `BEVY_EDITOR_CREATE` can list Create menu entries to
+/// add first, separated by commas, such as `Cube,Point Light`.
 fn screenshot_and_exit(
     time: Res<Time>,
     mut taken: Local<bool>,
     mut round_tripped: Local<bool>,
+    mut created: Local<bool>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     names: Query<(Entity, &Name)>,
@@ -72,6 +75,17 @@ fn screenshot_and_exit(
         return;
     };
     let elapsed = time.elapsed_secs();
+    if let Ok(list) = std::env::var("BEVY_EDITOR_CREATE")
+        && elapsed > 0.5
+        && !*created
+    {
+        *created = true;
+        commands.queue(move |world: &mut World| {
+            for kind in list.split(',').filter_map(ActorKind::from_label) {
+                bevy_editor::create::create_actor(world, kind);
+            }
+        });
+    }
     if let Ok(level) = std::env::var("BEVY_EDITOR_ROUNDTRIP")
         && elapsed > 1.0
         && !*round_tripped

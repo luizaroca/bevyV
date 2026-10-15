@@ -14,9 +14,11 @@
 //! - [`play`]: Play/Stop, which runs gameplay systems and restores the level afterwards.
 //! - [`level`]: saving and opening level files.
 //! - [`primitives`]: basic shapes that can be saved in a level.
+//! - [`create`]: the Create menu, which adds lights and shapes to the level.
 //! - [`details`]: the Details panel's component order.
 //! - [`world_settings`]: level-wide rendering options such as SSAO and SSGI.
 
+pub mod create;
 pub mod details;
 pub mod history;
 pub mod layout;

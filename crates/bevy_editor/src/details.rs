@@ -1,6 +1,6 @@
-//! Details panel layout in Unreal's order: the name and transform first, then what the actor
-//! is (shape, material, light, camera), then gameplay components, with engine-computed data
-//! hidden.
+//! Details panel layout in Unreal's order: the name, a shape's material and the transform first,
+//! then what the actor is (shape, light, camera), then gameplay components, with
+//! engine-computed data hidden.
 
 use bevy::{inspector::InspectorComponentOrder, prelude::*};
 
@@ -40,9 +40,10 @@ const HIDDEN: &[&str] = &[
 /// The rank of each component shown near the top. Anything else ranks [`OTHER`].
 const RANKED: &[(&str, i32)] = &[
     ("Name", 0),
+    // A shape's colour and roughness are what gets edited most, so they come first.
+    ("PrimitiveMaterial", 5),
     ("Transform", 10),
     ("Primitive", 20),
-    ("PrimitiveMaterial", 21),
     ("DirectionalLight", 30),
     ("PointLight", 30),
     ("SpotLight", 30),

@@ -7,13 +7,14 @@
 //! - Transform gizmo drags (one entry per drag).
 //! - Field edits made in the Details panel (one entry per drag or committed value).
 //! - Deleting entities.
+//! - Creating actors from the Create menu.
 
 use std::any::TypeId;
 
 use bevy::{
     ecs::{entity_disabling::Disabled, world::DeferredWorld},
     gizmos::transform_gizmo::{TransformGizmoState, TransformGizmoSystems},
-    inspector::details_panel::FieldEdit,
+    inspector::{details_panel::FieldEdit, InspectorSelection},
     platform::collections::HashMap,
     prelude::*,
     reflect::{PartialReflect, TypeRegistration},
@@ -157,20 +158,63 @@ impl DeleteEntities {
     }
 
     fn set_disabled(&self, world: &mut World, disabled: bool) {
-        let mut stack = self.entities.clone();
-        while let Some(entity) = stack.pop() {
-            let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
-                continue;
-            };
-            if let Some(children) = entity_mut.get::<Children>() {
-                stack.extend(children.iter());
-            }
-            if disabled {
-                entity_mut.insert(Disabled);
-            } else {
-                entity_mut.remove::<Disabled>();
-            }
+        set_disabled(world, &self.entities, disabled);
+    }
+}
+
+/// Disables or re-enables `entities` and all their descendants.
+fn set_disabled(world: &mut World, entities: &[Entity], disabled: bool) {
+    let mut stack = entities.to_vec();
+    while let Some(entity) = stack.pop() {
+        let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+            continue;
+        };
+        if let Some(children) = entity_mut.get::<Children>() {
+            stack.extend(children.iter());
         }
+        if disabled {
+            entity_mut.insert(Disabled);
+        } else {
+            entity_mut.remove::<Disabled>();
+        }
+    }
+}
+
+/// Creates entities. Undo disables them, the reverse of [`DeleteEntities`], so redo brings back
+/// the same entities with any edits made to them.
+pub struct CreateEntities {
+    label: String,
+    entities: Vec<Entity>,
+}
+
+impl CreateEntities {
+    /// Records that `entities` were just spawned.
+    pub fn new(label: impl Into<String>, entities: Vec<Entity>) -> Self {
+        Self {
+            label: label.into(),
+            entities,
+        }
+    }
+}
+
+impl EditorCommand for CreateEntities {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let mut selection = world.resource_mut::<InspectorSelection>();
+        if selection
+            .0
+            .is_some_and(|selected| self.entities.contains(&selected))
+        {
+            selection.0 = None;
+        }
+        set_disabled(world, &self.entities, true);
+    }
+
+    fn redo(&mut self, world: &mut World) {
+        set_disabled(world, &self.entities, false);
     }
 }
 

@@ -20,6 +20,7 @@ Updated at the end of every work session. Newest session first.
   - `BEVY_EDITOR_SCREENSHOT=<png>` saves a screenshot after 4 s and exits.
   - `BEVY_EDITOR_SELECT=<name>` selects that entity first.
   - `BEVY_EDITOR_ROUNDTRIP=<file>` saves the level and reopens it first.
+  - `BEVY_EDITOR_CREATE=<list>` adds Create menu entries first, such as `Cube,Point Light`.
 - `cargo test -p bevy_editor -p bevy_inspector -p bevy_gizmos` and
   `cargo clippy -p bevy_editor --all-targets` before committing.
 
@@ -36,6 +37,23 @@ Updated at the end of every work session. Newest session first.
   children. `level::load_level_from` re-inserts `ChildOf` after loading.
 - `Camera::viewport_to_world` / `world_to_viewport` already handle viewport offsets; do not
   subtract the viewport origin (that broke gizmo picking once).
+
+---
+
+## Session 2026-10-15 (Create menu)
+
+**Branch:** `claude/project-thread-wx0399`.
+
+**Done**
+- `+ Create` dropdown at the left of the toolbar (`src/create.rs`): Point, Spot and Directional
+  lights; Cube, Sphere, Cylinder, Cone, Plane, Capsule and Torus (new `Primitive::Torus`).
+  New actors go on the ground where the camera looks (or 5 m ahead), get a unique name
+  ("Cube 2"), are selected, and are one undo step (`history::CreateEntities`).
+- Each new shape has its own `PrimitiveMaterial`, so colour and roughness edits affect only it.
+  The Details panel now lists `PrimitiveMaterial` right after Name.
+
+**Next ideas**
+- A colour picker popup on the swatch (today: type a hex code), sliders for 0..1 fields.
 
 ---
 

@@ -1,4 +1,5 @@
-//! Basic shapes, like Unreal's "Basic" actors (Cube, Sphere, Cylinder, Plane, Cone).
+//! Basic shapes, like Unreal's "Basic" actors (Cube, Sphere, Cylinder, Plane, Cone, Capsule,
+//! Torus).
 //!
 //! Meshes and materials created in code are assets without a file, so they cannot be saved in a
 //! level. A [`Primitive`] and a [`PrimitiveMaterial`] describe the shape and look instead; the
@@ -48,6 +49,13 @@ pub enum Primitive {
         /// Length of the middle section.
         length: f32,
     },
+    /// A ring lying flat on the ground.
+    Torus {
+        /// Radius of the tube.
+        minor_radius: f32,
+        /// Distance from the centre to the middle of the tube.
+        major_radius: f32,
+    },
 }
 
 impl Default for Primitive {
@@ -77,6 +85,14 @@ impl Primitive {
             Primitive::Capsule { radius, length } => {
                 Capsule3d::new(radius.max(0.001), length.max(0.0)).into()
             }
+            Primitive::Torus {
+                minor_radius,
+                major_radius,
+            } => Torus {
+                minor_radius: minor_radius.max(0.001),
+                major_radius: major_radius.max(0.002),
+            }
+            .into(),
         }
     }
 }
@@ -132,6 +148,10 @@ impl Primitive {
             Primitive::Cone { radius, height } => [3, bits(radius), bits(height), 0],
             Primitive::Plane { size } => [4, bits(size.x), bits(size.y), 0],
             Primitive::Capsule { radius, length } => [5, bits(radius), bits(length), 0],
+            Primitive::Torus {
+                minor_radius,
+                major_radius,
+            } => [6, bits(minor_radius), bits(major_radius), 0],
         }
     }
 }
@@ -180,5 +200,39 @@ impl Plugin for PrimitivesPlugin {
             .register_type::<Primitive>()
             .register_type::<PrimitiveMaterial>()
             .add_systems(PostUpdate, (build_meshes, build_materials));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    #[test]
+    fn each_shape_has_its_own_material() {
+        let mut world = World::new();
+        world.init_resource::<Assets<StandardMaterial>>();
+        let a = world.spawn(PrimitiveMaterial::default()).id();
+        let b = world.spawn(PrimitiveMaterial::default()).id();
+        world.run_system_once(build_materials).unwrap();
+
+        world.get_mut::<PrimitiveMaterial>(a).unwrap().roughness = 0.9;
+        world.get_mut::<PrimitiveMaterial>(a).unwrap().base_color = Color::srgb(1.0, 0.0, 0.0);
+        world.run_system_once(build_materials).unwrap();
+
+        let material = |entity| {
+            let handle = world
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .unwrap();
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(handle)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(material(a).perceptual_roughness, 0.9);
+        assert_eq!(material(a).base_color, Color::srgb(1.0, 0.0, 0.0));
+        assert_eq!(material(b).perceptual_roughness, 0.5);
     }
 }
