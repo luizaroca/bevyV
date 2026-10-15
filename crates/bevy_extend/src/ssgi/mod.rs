@@ -5,11 +5,13 @@
 //! Each frame:
 //! 1. After the prepass, `trace.wesl` gathers bounce light and ambient occlusion for every pixel
 //!    from last frame's lit image (the history), using a visibility bitmask slice march.
-//! 2. After the main pass, the lit image is copied into the history for the next frame, and a
-//!    debug view can replace the image.
+//! 2. The main pass (forward or deferred) adds that bounce light to each surface's indirect
+//!    light and uses the occlusion like SSAO, through the `ScreenSpaceIndirectLight` hook this fork
+//!    adds to `bevy_pbr`.
+//! 3. After the main pass, the lit image is copied into the history for the next frame, so light
+//!    keeps bouncing over frames, and a debug view can replace the image.
 //!
-//! The result is not denoised and does not change lighting yet; it is only visible in the
-//! [debug views](SsgiDebugView).
+//! The result is not denoised yet, so it relies on TAA to smooth the noise.
 
 use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle};
@@ -28,6 +30,7 @@ use bevy_ecs::{
     system::{lifetimeless::Read, Commands, Query, Res, ResMut},
 };
 use bevy_image::ToExtents;
+use bevy_pbr::{ScreenSpaceIndirectLight, ScreenSpaceIndirectLightTexture};
 use bevy_reflect::{std_traits::ReflectDefault, Reflect};
 use bevy_render::{
     camera::ExtractedCamera,
@@ -75,12 +78,14 @@ pub struct ScreenSpaceGlobalIlluminationPlugin;
 /// image. It needs the depth, normal and motion vector prepasses (added automatically), an
 /// untonemapped main texture ([`TonemappingPass`], also added) and `Msaa::Off`.
 ///
-/// For now the result is only visible in the [debug views](SsgiDebugView); it does not change
-/// lighting yet.
+/// The bounce light is still raw and noisy, so for now use it together with TAA
+/// (`TemporalAntiAliasing`), which averages the noise over frames.
 #[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default, Clone, PartialEq)]
 #[require(DepthPrepass, NormalPrepass, MotionVectorPrepass, TonemappingPass)]
 pub struct ScreenSpaceGlobalIllumination {
+    /// Multiplies the bounce light. 1.0 is physically based; 0.0 leaves only the occlusion.
+    pub intensity: f32,
     /// How far away surfaces can send bounce light to a pixel, in meters (world units).
     ///
     /// Larger values reach further but get noisier and miss thin details.
@@ -99,6 +104,7 @@ pub struct ScreenSpaceGlobalIllumination {
 impl Default for ScreenSpaceGlobalIllumination {
     fn default() -> Self {
         Self {
+            intensity: 1.0,
             radius: 2.0,
             thickness: 0.5,
             slice_count: 4,
@@ -199,15 +205,23 @@ impl Plugin for ScreenSpaceGlobalIlluminationPlugin {
 }
 
 impl SyncComponent<RenderApp> for ScreenSpaceGlobalIllumination {
-    type Target = (Self, SsgiTextures, SsgiPipelineIds, SsgiSettingsBuffer);
+    type Target = (
+        Self,
+        ScreenSpaceIndirectLight,
+        ScreenSpaceIndirectLightTexture,
+        SsgiTextures,
+        SsgiPipelineIds,
+        SsgiSettingsBuffer,
+    );
 }
 
 impl ExtractComponent<RenderApp> for ScreenSpaceGlobalIllumination {
     type QueryData = (Read<Self>, Read<Msaa>);
     type QueryFilter = With<Camera3d>;
-    type Out = Self;
+    /// The marker tells `bevy_pbr` to build lighting pipelines that read SSGI's output.
+    type Out = (Self, ScreenSpaceIndirectLight);
 
-    fn extract_component((ssgi, msaa): QueryItem<'_, '_, Self::QueryData>) -> Option<Self> {
+    fn extract_component((ssgi, msaa): QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
         if *msaa != Msaa::Off {
             once!(error!(
                 "Screen-space global illumination needs Msaa::Off, but the camera uses Msaa::{:?}",
@@ -215,7 +229,7 @@ impl ExtractComponent<RenderApp> for ScreenSpaceGlobalIllumination {
             ));
             return None;
         }
-        Some(ssgi.clone())
+        Some((ssgi.clone(), ScreenSpaceIndirectLight))
     }
 }
 
@@ -270,17 +284,21 @@ fn prepare_ssgi_textures(
         } else {
             (history_2, history_1)
         };
-        commands.entity(entity).insert(SsgiTextures {
-            history_write,
-            history_read,
-            gi,
-        });
+        commands.entity(entity).insert((
+            ScreenSpaceIndirectLightTexture(gi.default_view.clone()),
+            SsgiTextures {
+                history_write,
+                history_read,
+                gi,
+            },
+        ));
     }
 }
 
 /// Settings as the trace shader reads them.
 #[derive(ShaderType, Clone, Default)]
 struct SsgiSettingsUniform {
+    intensity: f32,
     radius: f32,
     thickness: f32,
     slice_count: u32,
@@ -305,6 +323,7 @@ fn prepare_ssgi_settings(
 ) {
     for (entity, ssgi, buffer) in &mut views {
         let uniform = SsgiSettingsUniform {
+            intensity: ssgi.intensity.max(0.0),
             radius: ssgi.radius.max(0.01),
             thickness: ssgi.thickness.max(0.0),
             slice_count: ssgi.slice_count.max(1),

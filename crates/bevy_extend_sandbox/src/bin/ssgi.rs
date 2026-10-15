@@ -4,13 +4,13 @@
 //! a short block, and a light near the ceiling. With bounce light, the white surfaces pick up red
 //! and green near the side walls, which makes SSGI easy to judge by eye.
 //!
-//! SSGI is being built in phases. So far it traces raw (noisy) bounce light and ambient occlusion
-//! from the previous frame's lit image, visible only in the debug views; lighting itself does not
-//! change yet.
+//! SSGI is being built in phases. It now lights the scene with bounce light traced from the
+//! previous frame's lit image. It is not denoised yet, so it relies on TAA to smooth the noise.
 //!
 //! Run it with `cargo run -p bevy_extend_sandbox --bin ssgi --release`.
 //!
 //! Controls:
+//! - Space: turn SSGI on and off, to compare
 //! - G: cycle the SSGI debug view (off, bounce light, ambient occlusion, history, reprojected
 //!   history, reprojection error)
 //! - `[` and `]`: shrink or grow the SSGI radius
@@ -22,11 +22,14 @@
 //! For automated checks, `SSGI_AUTOSHOT=path.png` saves a screenshot after a short warm-up and
 //! quits, `SSGI_DEBUG=off|bounce|ao|history|reprojected|error` picks the starting debug view,
 //! `SSGI_ORBIT=1` slowly swings the camera so reprojection can be checked while moving, and
-//! `SSGI_TAA=0` starts with TAA off.
+//! `SSGI_TAA=0` starts with TAA off, `SSGI=0` starts with SSGI off, and `SSGI_DEFERRED=1`
+//! renders with Bevy's deferred renderer instead of forward.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
+    core_pipeline::prepass::DeferredPrepass,
+    pbr::DefaultOpaqueRendererMethod,
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
 };
@@ -48,6 +51,7 @@ const AUTOSHOT_FRAME: u32 = 120;
 
 #[derive(Resource)]
 struct Settings {
+    ssgi: bool,
     debug_view: SsgiDebugView,
     radius: f32,
     taa: bool,
@@ -66,6 +70,7 @@ impl Default for Settings {
             _ => SsgiDebugView::Off,
         };
         Self {
+            ssgi: std::env::var("SSGI").map_or(true, |value| value != "0"),
             debug_view,
             radius: ScreenSpaceGlobalIllumination::default().radius,
             taa: std::env::var("SSGI_TAA").map_or(true, |value| value != "0"),
@@ -82,38 +87,42 @@ struct HelpText;
 struct Spinning;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Bevy Extend: SSGI test".into(),
-                    ..default()
-                }),
+    let deferred = std::env::var("SSGI_DEFERRED").is_ok_and(|value| value == "1");
+    let mut app = App::new();
+    if deferred {
+        app.insert_resource(DefaultOpaqueRendererMethod::deferred());
+    }
+    app.add_plugins((
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Bevy Extend: SSGI test".into(),
                 ..default()
             }),
-            FreeCameraPlugin,
-            ExtendPlugins,
-        ))
-        .init_resource::<Settings>()
-        // Almost no ambient light, so any bounce light SSGI adds later stands out.
-        .insert_resource(GlobalAmbientLight {
-            brightness: 20.0,
             ..default()
-        })
-        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.02)))
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (
-                handle_input,
-                apply_settings,
-                spin,
-                orbit_camera,
-                take_screenshots,
-            )
-                .chain(),
+        }),
+        FreeCameraPlugin,
+        ExtendPlugins,
+    ))
+    .init_resource::<Settings>()
+    // Almost no ambient light, so any bounce light SSGI adds later stands out.
+    .insert_resource(GlobalAmbientLight {
+        brightness: 20.0,
+        ..default()
+    })
+    .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.02)))
+    .add_systems(Startup, setup)
+    .add_systems(
+        Update,
+        (
+            handle_input,
+            apply_settings,
+            spin,
+            orbit_camera,
+            take_screenshots,
         )
-        .run();
+            .chain(),
+    )
+    .run();
 }
 
 fn setup(
@@ -210,15 +219,20 @@ fn setup(
         Transform::from_xyz(0.0, ROOM_SIZE - 0.3, 0.0),
     ));
 
-    commands.spawn((
-        Name::new("Camera"),
-        Camera3d::default(),
-        Transform::from_translation(CAMERA_POSITION).looking_at(CAMERA_TARGET, Vec3::Y),
-        FreeCamera::default(),
-        // SSGI adds the prepasses it needs; it does need MSAA off.
-        ScreenSpaceGlobalIllumination::default(),
-        Msaa::Off,
-    ));
+    let camera = commands
+        .spawn((
+            Name::new("Camera"),
+            Camera3d::default(),
+            Transform::from_translation(CAMERA_POSITION).looking_at(CAMERA_TARGET, Vec3::Y),
+            FreeCamera::default(),
+            // SSGI adds the prepasses it needs; it does need MSAA off.
+            ScreenSpaceGlobalIllumination::default(),
+            Msaa::Off,
+        ))
+        .id();
+    if std::env::var("SSGI_DEFERRED").is_ok_and(|value| value == "1") {
+        commands.entity(camera).insert(DeferredPrepass);
+    }
 
     commands.spawn((
         HelpText,
@@ -242,6 +256,9 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>)
     if keys.just_pressed(KeyCode::BracketRight) {
         settings.radius = (settings.radius * 1.25).min(8.0);
     }
+    if keys.just_pressed(KeyCode::Space) {
+        settings.ssgi = !settings.ssgi;
+    }
     if keys.just_pressed(KeyCode::KeyP) {
         settings.spinning = !settings.spinning;
     }
@@ -253,16 +270,27 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>)
 fn apply_settings(
     mut commands: Commands,
     settings: Res<Settings>,
-    mut cameras: Query<(Entity, &mut ScreenSpaceGlobalIllumination)>,
+    cameras: Query<Entity, With<Camera3d>>,
     mut help: Single<&mut Text, With<HelpText>>,
 ) {
     if !settings.is_changed() {
         return;
     }
 
-    for (camera, mut ssgi) in &mut cameras {
-        ssgi.debug_view = settings.debug_view;
-        ssgi.radius = settings.radius;
+    for camera in &cameras {
+        if settings.ssgi {
+            commands
+                .entity(camera)
+                .insert(ScreenSpaceGlobalIllumination {
+                    radius: settings.radius,
+                    debug_view: settings.debug_view,
+                    ..default()
+                });
+        } else {
+            commands
+                .entity(camera)
+                .remove::<ScreenSpaceGlobalIllumination>();
+        }
         if settings.taa {
             commands
                 .entity(camera)
@@ -282,11 +310,13 @@ fn apply_settings(
         SsgiDebugView::ReprojectionError => "reprojection error (black is good)",
     };
     help.0 = format!(
-        "SSGI test (Bevy Extend), phase 2: raw trace in debug views, no lighting change yet\n\
+        "SSGI test (Bevy Extend), phase 3: lighting, not denoised yet\n\
+         [Space] SSGI: {}\n\
          [G] Debug view: {debug_view}\n\
          [ / ] Radius: {:.2} m\n\
          [P] Spinning block: {}\n\
          [T] TAA: {}",
+        on_off(settings.ssgi),
         settings.radius,
         on_off(settings.spinning),
         on_off(settings.taa),
