@@ -3,12 +3,15 @@
 //! Everything this fork adds goes in `bevy_extend*` crates so that pulling in upstream Bevy
 //! changes rarely conflicts with our work. Add [`ExtendPlugins`] to an app to enable them.
 
+pub mod ssgi;
+
 use bevy_app::{plugin_group, Plugin};
 
 plugin_group! {
     /// All Bevy Extend plugins.
     pub struct ExtendPlugins {
         :ExtendCorePlugin,
+        ssgi:::ScreenSpaceGlobalIlluminationPlugin,
     }
 }
 

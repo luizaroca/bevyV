@@ -13,6 +13,7 @@ in Bevy updates rarely conflicts:
   Run it with `cargo run -p bevy_extend_sandbox`.
   Extra test scenes live in `crates/bevy_extend_sandbox/src/bin`, for example the soft shadows
   test: `cargo run -p bevy_extend_sandbox --bin soft_shadows --release`.
+  The SSGI test (a Cornell box, work in progress): `cargo run -p bevy_extend_sandbox --bin ssgi --release`.
 
 When a feature does need to change an upstream file, keep the change small and mention it in the PR.
 
