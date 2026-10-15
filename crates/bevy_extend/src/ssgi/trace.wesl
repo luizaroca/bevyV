@@ -69,12 +69,20 @@ fn load_previous_radiance(pixel: vec2<i32>, uv: vec2<f32>) -> vec3<f32> {
     return textureLoad(history, uv_to_pixel(previous_uv), 0).rgb;
 }
 
-/// Interleaved gradient noise (Jimenez 2014), shifted every frame along the R2 sequence so
-/// averaging frames later converges.
-fn noise(pixel: vec2<i32>, offset: f32) -> f32 {
-    let shift = vec2<f32>(f32(settings.frame % 64u)) * vec2(5.588238, 3.8862);
-    let p = vec2<f32>(pixel) + shift + offset;
-    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+/// PCG hash (Jarzynski and Olano 2020): turns an integer into well-mixed random bits.
+fn pcg(input: u32) -> u32 {
+    let state = input * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+/// Two independent random numbers in 0..1 for this pixel and frame. Plain white noise: an
+/// earlier pattern-based noise left visible diagonal and horizontal streaks.
+fn random_pair(pixel: vec2<i32>) -> vec2<f32> {
+    let seed = pcg(u32(pixel.x) + pcg(u32(pixel.y) + pcg(settings.frame)));
+    let a = pcg(seed);
+    let b = pcg(a);
+    return vec2(f32(a >> 8u), f32(b >> 8u)) / 16777216.0;
 }
 
 @compute
@@ -99,8 +107,9 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let slice_count = f32(settings.slice_count);
     let samples_per_side = f32(settings.samples_per_slice_side);
-    let slice_noise = noise(pixel, 0.0);
-    let step_noise = noise(pixel, 17.0);
+    let noise = random_pair(pixel);
+    let slice_noise = noise.x;
+    let step_noise = noise.y;
 
     // How far `radius` meters reach on screen at this depth, in viewport UV.
     let radius_uv = 0.5 * settings.radius * vec2(view.clip_from_view[0][0], view.clip_from_view[1][1])
