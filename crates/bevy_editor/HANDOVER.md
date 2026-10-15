@@ -21,6 +21,7 @@ Updated at the end of every work session. Newest session first.
   - `BEVY_EDITOR_SELECT=<name>` selects that entity first.
   - `BEVY_EDITOR_ROUNDTRIP=<file>` saves the level and reopens it first.
   - `BEVY_EDITOR_CREATE=<list>` adds Create menu entries first, such as `Cube,Point Light`.
+  - `BEVY_EDITOR_DELETE=<list>` deletes the named entities, as the Delete key does.
 - `cargo test -p bevy_editor -p bevy_inspector -p bevy_gizmos` and
   `cargo clippy -p bevy_editor --all-targets` before committing.
 
@@ -30,6 +31,10 @@ Updated at the end of every work session. Newest session first.
   `InspectorComponentOrder` (Details panel order and hiding), and editable hex color fields.
 - `bevy_gizmos_render`: the transform gizmo's overlay camera no longer clears the colour buffer
   (it erased the scene behind the gizmo).
+- `bevy_inspector`: the entity tree hides disabled entities (deleted objects kept for undo).
+- `bevy_pbr`: `extract_lights` removes the extracted light of a disabled light. Before, a deleted
+  light kept shining and its shadow views crashed the renderer (`Failed to get point light
+  visible entities`).
 
 ## Known Bevy issues worked around
 
