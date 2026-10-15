@@ -13,6 +13,7 @@
             quality_level: High,
             radius: 0.7285,
             constant_object_thickness: 0.25,
+            intensity: 2.0,
           ),
           ssgi_settings: (
             intensity: 1.0,

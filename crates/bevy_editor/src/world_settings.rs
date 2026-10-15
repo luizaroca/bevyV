@@ -31,7 +31,7 @@ pub struct WorldSettings {
     /// Screen-space global illumination: light bouncing off nearby surfaces, which tints them
     /// with each other's colors. Includes ambient occlusion.
     pub ssgi: bool,
-    /// SSAO quality and radius, used while `ssao` is on.
+    /// SSAO quality, radius and intensity, used while `ssao` is on.
     pub ssao_settings: ScreenSpaceAmbientOcclusion,
     /// SSGI strength, reach, denoising and debug views, used while `ssgi` is on.
     pub ssgi_settings: ScreenSpaceGlobalIllumination,
@@ -47,7 +47,11 @@ impl Default for WorldSettings {
             ambient_brightness: default_ambient_brightness(),
             ssao: false,
             ssgi: false,
-            ssao_settings: default(),
+            // Twice Bevy's default strength, so SSAO is noticeable next to direct light.
+            ssao_settings: ScreenSpaceAmbientOcclusion {
+                intensity: 2.0,
+                ..default()
+            },
             ssgi_settings: default(),
         }
     }
