@@ -107,12 +107,9 @@ fn apply_world_settings(
         } else {
             camera.remove::<ScreenSpaceGlobalIllumination>();
         }
-        if current.ssao || current.ssgi {
-            // Both read the depth and normal prepasses, which don't support MSAA.
-            camera.insert(Msaa::Off);
-        } else {
+        if !current.ssao && !current.ssgi {
             // Back to the plain forward camera the editor starts with.
-            camera.insert(Msaa::default()).remove::<(
+            camera.remove::<(
                 DepthPrepass,
                 NormalPrepass,
                 MotionVectorPrepass,
@@ -121,6 +118,28 @@ fn apply_world_settings(
         }
     }
     *applied = Some(current);
+}
+
+/// SSAO and SSGI read the depth and normal prepasses, which don't support MSAA, so MSAA is off
+/// while either is on. Every camera drawing to the window gets the same setting: Bevy keeps a
+/// separate image per MSAA setting, so the gizmo and UI cameras, which draw over the level
+/// camera, would otherwise keep showing an old frame of the level.
+fn match_msaa(
+    settings: Query<&WorldSettings>,
+    cameras: Query<(Entity, Option<&Msaa>), With<Camera>>,
+    mut commands: Commands,
+) {
+    let current = settings.iter().next();
+    let msaa = if current.is_some_and(|settings| settings.ssao || settings.ssgi) {
+        Msaa::Off
+    } else {
+        Msaa::default()
+    };
+    for (camera, current) in &cameras {
+        if current != Some(&msaa) {
+            commands.entity(camera).insert(msaa);
+        }
+    }
 }
 
 /// Registers World Settings and the effects they control.
@@ -135,6 +154,6 @@ impl Plugin for WorldSettingsPlugin {
             .add_systems(PostStartup, |world: &mut World| {
                 ensure_world_settings(world);
             })
-            .add_systems(Update, apply_world_settings);
+            .add_systems(Update, (apply_world_settings, match_msaa));
     }
 }
