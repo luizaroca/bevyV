@@ -1,0 +1,163 @@
+(
+  resources: {},
+  entities: {"536v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Sun",
+        "bevy_editor::LevelEntity": (),
+        "bevy_light::cascade::CascadeShadowConfig": (
+          bounds: [
+            6.0,
+            9.654894,
+            15.536163,
+            25.0,
+          ],
+          overlap_proportion: 0.2,
+          minimum_distance: 0.1,
+        ),
+        "bevy_light::directional_light::DirectionalLight": (
+          color: LinearRgba((
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            alpha: 1.0,
+          )),
+          illuminance: 10000.0,
+          shadow_maps_enabled: true,
+          contact_shadows_enabled: false,
+          soft_shadow_size: Some(0.04),
+          affects_lightmapped_mesh_diffuse: true,
+          shadow_depth_bias: 0.02,
+          shadow_normal_bias: 1.8,
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (4.0, 3.0, -2.5),
+          rotation: (-0.13254704, 0.8231715, 0.21446562, 0.508748),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),"533v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Sphere",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Sphere(
+          radius: 0.55,
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.6,
+            green: 0.6,
+            blue: 0.6,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.25,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.2, 0.55, 1.3),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),"532v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Cylinder",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cylinder(
+          radius: 0.35,
+          height: 2.0,
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.6,
+            green: 0.6,
+            blue: 0.6,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.8,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (1.6, 1.0, -0.6),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),"531v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Box",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (1.6, 1.6, 1.6),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.6,
+            green: 0.6,
+            blue: 0.6,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.8,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (-0.6, 0.8, -0.8),
+          rotation: (0.0, 0.24740396, 0.0, 0.9689124),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),"530v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Floor",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Plane(
+          size: (40.0, 40.0),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.6,
+            green: 0.6,
+            blue: 0.6,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.8,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_picking::hover::PickingInteraction": Hovered,
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 0.0, 0.0),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+  },
+)

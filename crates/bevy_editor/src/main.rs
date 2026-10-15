@@ -2,7 +2,7 @@
 //!
 //! ```bash
 //! cargo run -p bevy_editor
-//! cargo run -p bevy_editor -- assets/levels/soft_shadows.level.ron
+//! cargo run -p bevy_editor -- assets/levels/soft_shadows_point.level.ron
 //! ```
 
 use bevy::{

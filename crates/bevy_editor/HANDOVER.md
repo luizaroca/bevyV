@@ -24,8 +24,8 @@ Updated at the end of every work session. Newest session first.
 
 ## Changes to Bevy's own crates
 
-- `bevy_inspector`: `InspectorRootFilter` (which roots the entity tree lists) and
-  `InspectorComponentOrder` (Details panel order and hiding).
+- `bevy_inspector`: `InspectorRootFilter` (which roots the entity tree lists),
+  `InspectorComponentOrder` (Details panel order and hiding), and editable hex color fields.
 - `bevy_gizmos_render`: the transform gizmo's overlay camera no longer clears the colour buffer
   (it erased the scene behind the gizmo).
 
@@ -45,8 +45,10 @@ Updated at the end of every work session. Newest session first.
 **Done**
 - Turned on `experimental_pbr_pcss` for the editor, so lights' soft shadow settings work.
 - `cargo run -p bevy_editor -- <level file>` opens that level at startup.
-- Test level `assets/levels/soft_shadows.level.ron`: box, cylinder, sphere, a point light (on),
-  and a spot light and sun (hidden; set Visibility to switch).
+- Test levels `assets/levels/soft_shadows_{point,spot,sun}.level.ron`: box, cylinder, sphere and
+  one light each (File > Open to switch). A single level with hidden lights confused testing.
+- Colors are editable in the Details panel as hex codes (`#RRGGBB` or `#RRGGBBAA`), for `Color`,
+  `Srgba` and `LinearRgba` fields. Change to `bevy_inspector`.
 - Levels no longer save the sun's computed `Cascades`.
 
 ---

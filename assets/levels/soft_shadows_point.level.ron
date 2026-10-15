@@ -1,76 +1,6 @@
 (
   resources: {},
-  entities: {
-    "536v0": (
-      components: {
-        "bevy_camera::visibility::Visibility": Hidden,
-        "bevy_ecs::name::Name": "Sun",
-        "bevy_editor::LevelEntity": (),
-        "bevy_light::cascade::CascadeShadowConfig": (
-          bounds: [
-            6.0,
-            9.654894,
-            15.536163,
-            25.0,
-          ],
-          overlap_proportion: 0.2,
-          minimum_distance: 0.1,
-        ),
-        "bevy_light::directional_light::DirectionalLight": (
-          color: LinearRgba((
-            red: 1.0,
-            green: 1.0,
-            blue: 1.0,
-            alpha: 1.0,
-          )),
-          illuminance: 10000.0,
-          shadow_maps_enabled: true,
-          contact_shadows_enabled: false,
-          soft_shadow_size: Some(0.04),
-          affects_lightmapped_mesh_diffuse: true,
-          shadow_depth_bias: 0.02,
-          shadow_normal_bias: 1.8,
-        ),
-        "bevy_transform::components::transform::Transform": (
-          translation: (4.0, 3.0, -2.5),
-          rotation: (-0.13254704, 0.8231715, 0.21446562, 0.508748),
-          scale: (1.0, 1.0, 1.0),
-        ),
-      },
-    ),
-    "535v0": (
-      components: {
-        "bevy_camera::visibility::Visibility": Hidden,
-        "bevy_ecs::name::Name": "Spot Light",
-        "bevy_editor::LevelEntity": (),
-        "bevy_light::spot_light::SpotLight": (
-          color: LinearRgba((
-            red: 1.0,
-            green: 1.0,
-            blue: 1.0,
-            alpha: 1.0,
-          )),
-          intensity: 2000000.0,
-          range: 30.0,
-          radius: 0.4,
-          shadow_maps_enabled: true,
-          contact_shadows_enabled: false,
-          soft_shadows_enabled: true,
-          affects_lightmapped_mesh_diffuse: true,
-          shadow_depth_bias: 0.02,
-          shadow_normal_bias: 1.8,
-          shadow_map_near_z: 0.1,
-          outer_angle: 1.0,
-          inner_angle: 0.6,
-        ),
-        "bevy_transform::components::transform::Transform": (
-          translation: (-3.0, 2.5, 2.5),
-          rotation: (-0.20184809, -0.37343848, -0.083608225, 0.90156025),
-          scale: (1.0, 1.0, 1.0),
-        ),
-      },
-    ),
-    "534v0": (
+  entities: {"534v0": (
       components: {
         "bevy_camera::visibility::Visibility": Inherited,
         "bevy_ecs::name::Name": "Point Light",
@@ -99,8 +29,7 @@
           scale: (1.0, 1.0, 1.0),
         ),
       },
-    ),
-    "533v0": (
+    ),"533v0": (
       components: {
         "bevy_camera::visibility::Visibility": Inherited,
         "bevy_ecs::name::Name": "Sphere",
@@ -130,8 +59,7 @@
           scale: (1.0, 1.0, 1.0),
         ),
       },
-    ),
-    "532v0": (
+    ),"532v0": (
       components: {
         "bevy_camera::visibility::Visibility": Inherited,
         "bevy_ecs::name::Name": "Cylinder",
@@ -162,8 +90,7 @@
           scale: (1.0, 1.0, 1.0),
         ),
       },
-    ),
-    "531v0": (
+    ),"531v0": (
       components: {
         "bevy_camera::visibility::Visibility": Inherited,
         "bevy_ecs::name::Name": "Box",
@@ -193,8 +120,7 @@
           scale: (1.0, 1.0, 1.0),
         ),
       },
-    ),
-    "530v0": (
+    ),"530v0": (
       components: {
         "bevy_camera::visibility::Visibility": Inherited,
         "bevy_ecs::name::Name": "Floor",
