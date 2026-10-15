@@ -240,6 +240,7 @@ pub fn load_level_from(world: &mut World, path: &Path) -> Result<(), String> {
             world.entity_mut(entity).insert(ChildOf(parent));
         }
     }
+    crate::world_settings::ensure_world_settings(world);
     world.resource_mut::<CurrentLevel>().path = Some(path.to_path_buf());
     info!("Opened level {}", path.display());
     Ok(())
@@ -368,6 +369,7 @@ pub fn new_level(world: &mut World) {
             size: Vec2::splat(20.0),
         },
     ));
+    crate::world_settings::ensure_world_settings(world);
 }
 
 /// Shows the level name and unsaved state in the window title, like "Bevy Editor - Arena*".

@@ -1,0 +1,309 @@
+(
+  resources: {},
+  entities: {
+    "110v0": (
+      components: {
+        "bevy_ecs::name::Name": "World Settings",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::world_settings::WorldSettings": (
+          ssao: false,
+          ssgi: true,
+          ssao_settings: (
+            quality_level: High,
+            radius: 0.7285,
+            constant_object_thickness: 0.25,
+          ),
+          ssgi_settings: (
+            intensity: 1.0,
+            radius: 2.0,
+            thickness: 0.5,
+            slice_count: 4,
+            samples_per_slice_side: 8,
+            half_resolution: false,
+            denoise: true,
+            max_history_frames: 16,
+            debug_view: Off,
+          ),
+        ),
+      },
+    ),
+    "109v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Floor",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (5.4, 0.2, 5.4),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.75,
+            green: 0.75,
+            blue: 0.72,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, -0.1, 0.0),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "108v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Ceiling",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (5.4, 0.2, 5.4),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.75,
+            green: 0.75,
+            blue: 0.72,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 4.1, 0.0),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "107v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Back Wall",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (5.4, 4.0, 0.2),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.75,
+            green: 0.75,
+            blue: 0.72,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (1.442221, 2.0, -2.163331),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "106v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Red Wall",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (0.2, 4.0, 5.0),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.75,
+            green: 0.08,
+            blue: 0.06,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (-2.163331, 2.0, -1.442221),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "105v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Green Wall",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (0.2, 4.0, 5.0),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.1,
+            green: 0.65,
+            blue: 0.1,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (2.163331, 2.0, 1.442221),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "104v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Tall Block",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (1.3, 2.6, 1.3),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.75,
+            green: 0.75,
+            blue: 0.72,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (-0.249615, 1.3, -1.248075),
+          rotation: (0.0, -0.119184, 0.0, 0.992872),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "103v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Short Block",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (1.3, 1.3, 1.3),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 0.75,
+            green: 0.75,
+            blue: 0.72,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.416025, 0.65, 0.99846),
+          rotation: (0.0, -0.435939, 0.0, 0.899976),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "102v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Ceiling Lamp",
+        "bevy_editor::LevelEntity": (),
+        "bevy_editor::primitives::Primitive": Cube(
+          size: (1.4, 0.05, 1.0),
+        ),
+        "bevy_editor::primitives::PrimitiveMaterial": (
+          base_color: Srgba((
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            alpha: 1.0,
+          )),
+          metallic: 0.0,
+          roughness: 0.9,
+          emissive: (
+            red: 12.0,
+            green: 11.0,
+            blue: 9.0,
+            alpha: 1.0,
+          ),
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 3.97, 0.0),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    "101v0": (
+      components: {
+        "bevy_camera::visibility::Visibility": Inherited,
+        "bevy_ecs::name::Name": "Lamp Light",
+        "bevy_editor::LevelEntity": (),
+        "bevy_light::point_light::PointLight": (
+          color: LinearRgba((
+            red: 1.0,
+            green: 0.92,
+            blue: 0.8,
+            alpha: 1.0,
+          )),
+          intensity: 600000.0,
+          range: 30.0,
+          radius: 0.3,
+          shadow_maps_enabled: true,
+          contact_shadows_enabled: false,
+          soft_shadows_enabled: true,
+          affects_lightmapped_mesh_diffuse: true,
+          shadow_depth_bias: 0.08,
+          shadow_normal_bias: 0.6,
+          shadow_map_near_z: 0.1,
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 3.5, 0.0),
+          rotation: (0.0, -0.289784, 0.0, 0.957092),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+  },
+)
