@@ -130,6 +130,15 @@ pub struct ScreenSpaceAmbientOcclusion {
     /// This value is used to decide how far behind an object a ray of light needs to be in order
     /// to pass behind it. Any ray closer than that will be occluded.
     pub constant_object_thickness: f32,
+    /// How strongly occlusion darkens: the visibility is raised to this power, so `2.0` makes
+    /// corners and creases noticeably darker and `1.0` is the unmodified result.
+    /// Defaults to `1.0`. (Bevy Extend fork addition.)
+    #[reflect(default = "default_ssao_intensity")]
+    pub intensity: f32,
+}
+
+fn default_ssao_intensity() -> f32 {
+    1.0
 }
 
 const DEFAULT_SSAO_RADIUS: f32 = 0.5 * 1.457;
@@ -140,6 +149,7 @@ impl Default for ScreenSpaceAmbientOcclusion {
             quality_level: ScreenSpaceAmbientOcclusionQualityLevel::default(),
             radius: DEFAULT_SSAO_RADIUS,
             constant_object_thickness: 0.25,
+            intensity: default_ssao_intensity(),
         }
     }
 }
@@ -148,6 +158,7 @@ impl Default for ScreenSpaceAmbientOcclusion {
 struct SsaoSettingsUniform {
     radius: f32,
     constant_object_thickness: f32,
+    intensity: f32,
 }
 
 #[derive(Reflect, PartialEq, Eq, Hash, Clone, Copy, Default, Debug)]
@@ -604,6 +615,7 @@ fn prepare_ssao_textures(
             .write(&SsaoSettingsUniform {
                 radius: ssao_settings.radius,
                 constant_object_thickness: ssao_settings.constant_object_thickness,
+                intensity: ssao_settings.intensity,
             })
             .unwrap();
 

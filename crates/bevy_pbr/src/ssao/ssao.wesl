@@ -30,6 +30,7 @@ import bevy_render::{
 struct SsaoSettings {
     radius: f32,
     thickness: f32,
+    intensity: f32,
 }
 @group(0) @binding(6) var<uniform> settings: SsaoSettings;
 @group(1) @binding(0) var point_clamp_sampler: sampler;
@@ -198,7 +199,7 @@ fn ssao(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     visibility = 1.0 - f32(occluded_sample_count) / (slice_count * 2.0 * samples_per_slice_side);
 
-    visibility = clamp(visibility, 0.03, 1.0);
+    visibility = clamp(pow(visibility, settings.intensity), 0.03, 1.0);
 
     textureStore(ambient_occlusion, pixel_coordinates, vec4<f32>(visibility, 0.0, 0.0, 0.0));
 }
