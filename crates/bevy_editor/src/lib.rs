@@ -12,10 +12,16 @@
 //! - [`history`]: the undo/redo stack (Unreal's transaction system).
 //! - [`shortcuts`]: Unreal's default keyboard shortcuts.
 //! - [`play`]: Play/Stop, which runs gameplay systems and restores the level afterwards.
+//! - [`level`]: saving and opening level files.
+//! - [`primitives`]: basic shapes that can be saved in a level.
+//! - [`details`]: the Details panel's component order.
 
+pub mod details;
 pub mod history;
 pub mod layout;
+pub mod level;
 pub mod play;
+pub mod primitives;
 pub mod selection;
 pub mod shortcuts;
 pub mod viewport;
@@ -68,6 +74,9 @@ impl Plugin for EditorPlugin {
             layout::LayoutPlugin,
             shortcuts::ShortcutsPlugin,
             play::PlayPlugin,
+            level::LevelPlugin,
+            primitives::PrimitivesPlugin,
+            details::DetailsPlugin,
         ))
         .register_type::<LevelEntity>()
         .register_type::<EditorEntity>()

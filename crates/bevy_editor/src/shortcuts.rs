@@ -9,6 +9,9 @@
 //! | Delete | Delete selection |
 //! | Ctrl + Z | Undo |
 //! | Ctrl + Y, Ctrl + Shift + Z | Redo |
+//! | Ctrl + N | New level |
+//! | Ctrl + O | Open level |
+//! | Ctrl + S, Ctrl + Shift + S | Save level, Save level as |
 //! | Alt + P | Play / Stop |
 //! | Escape | Stop playing, or clear the selection |
 //!
@@ -24,6 +27,7 @@ use bevy::{
 
 use crate::{
     history::{self, DeleteEntities},
+    level,
     play::{self, EditorMode},
     selection::GizmoVisible,
     viewport,
@@ -85,6 +89,10 @@ fn handle_shortcuts(world: &mut World) {
             (KeyCode::KeyZ, true, false) if shift => history::redo(world),
             (KeyCode::KeyZ, true, false) => history::undo(world),
             (KeyCode::KeyY, true, false) => history::redo(world),
+            (KeyCode::KeyS, true, false) if shift => level::save_level_as(world),
+            (KeyCode::KeyS, true, false) => level::save_level(world),
+            (KeyCode::KeyO, true, false) => level::open_level(world),
+            (KeyCode::KeyN, true, false) => level::new_level(world),
             (KeyCode::Backquote, true, false) => toggle_gizmo_space(world),
             (KeyCode::KeyP, false, true) => play::toggle_play(world),
             (KeyCode::KeyQ, false, false) => set_select_mode(world),

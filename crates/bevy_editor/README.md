@@ -17,6 +17,12 @@ cargo run -p bevy_editor
 - Undo/redo for gizmo drags, Details panel edits and deletes.
 - Play/Stop: gameplay systems gated with `in_play_mode` run while playing, and the level is
   restored on Stop.
+- New / Open / Save / Save As levels (`.level.ron` files) through native file dialogs, with
+  the level name and an unsaved-changes `*` in the window title.
+- Basic shapes (`Primitive`: cube, sphere, cylinder, cone, plane, capsule) with a
+  `PrimitiveMaterial`; edit their size and colour in the Details panel and the mesh updates.
+- Details panel in Unreal's order (Name, Transform, shape, material, lights, then gameplay
+  components), hiding engine-computed components.
 
 ## Controls
 
@@ -34,14 +40,18 @@ cargo run -p bevy_editor
 | Ctrl + \` | Toggle world/local space |
 | Delete | Delete selection |
 | Ctrl + Z, Ctrl + Y | Undo, redo |
+| Ctrl + N, Ctrl + O | New level, open level |
+| Ctrl + S, Ctrl + Shift + S | Save, save as |
 | Alt + P, Esc | Play/Stop, stop |
 
 ## Using it with your own level
 
 Add `EditorPlugin` after `DefaultPlugins`, and mark the root entities of your level with
-`LevelEntity`. Gate gameplay systems with `.run_if(in_play_mode)`.
+`LevelEntity`. Gate gameplay systems with `.run_if(in_play_mode)`. Use `Primitive` and
+`PrimitiveMaterial` instead of meshes and materials created in code, which cannot be saved.
 
 ## Not done yet
 
-Saving and loading levels, multi-selection, a Content Browser, spawning actors from a palette,
-duplicate (Ctrl+D), dockable/rearrangeable tabs, and Unreal-style ordering of the Details panel.
+Multi-selection, a Content Browser, spawning actors from a palette,
+duplicate (Ctrl+D), dockable/rearrangeable tabs, and saving imported models (glTF) in levels, and a prompt for unsaved changes when closing the
+window.

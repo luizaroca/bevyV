@@ -23,3 +23,11 @@ git remote add upstream https://github.com/bevyengine/bevy.git   # once
 git fetch upstream
 git merge upstream/main
 ```
+
+## Releases
+
+Fork releases are git tags (`vX.Y.Z`); crate versions keep following Bevy's.
+
+- `v0.2.1`: the level editor (`crates/bevy_editor`, `crates/bevy_inspector`) plus contact-hardening
+  soft shadows for point, spot and directional lights. Try both with
+  `cargo run -p bevy_editor --release -- assets/levels/soft_shadows_all.level.ron`.

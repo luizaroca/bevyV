@@ -150,8 +150,8 @@ impl FieldValue {
 /// A request to write a new value into one field of a component on an inspected entity.
 ///
 /// The edit is applied through commands, and only when the [`InspectorSource`] is
-/// [`InspectorSource::Local`]; it is ignored otherwise. [`FieldValue::Color`] and
-/// [`FieldValue::Label`] values are not supported. An edit that cannot be applied logs a warning
+/// [`InspectorSource::Local`]; it is ignored otherwise. [`FieldValue::Label`] values
+/// are not supported. An edit that cannot be applied logs a warning
 /// and leaves the component unchanged.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct FieldEdit {
@@ -519,6 +519,10 @@ pub(crate) fn inspector_field_text_changed(
         widget,
         |current| match current {
             FieldValue::Text(current) if *current == text => None,
+            // A color input only edits once it holds a complete hex code.
+            FieldValue::Color(current) => parse_hex_color(&text)
+                .filter(|color| color_to_hex(*color) != color_to_hex(*current))
+                .map(FieldValue::Color),
             _ => Some(FieldValue::Text(text)),
         },
         &fields,
@@ -689,8 +693,33 @@ fn write_field_value(field: &mut dyn PartialReflect, value: &FieldValue) -> Fiel
             Some(name) => write_variant_field(field, name),
             None => FieldWrite::Rejected,
         },
-        FieldValue::Color(_) | FieldValue::Label(_) => FieldWrite::Rejected,
+        FieldValue::Color(color) => write_color_field(field, *color),
+        FieldValue::Label(_) => FieldWrite::Rejected,
     }
+}
+
+/// Writes a color into a [`Color`], [`Srgba`] or [`LinearRgba`] field.
+fn write_color_field(field: &mut dyn PartialReflect, color: Color) -> FieldWrite {
+    if let Some(target) = field.try_downcast_mut::<Color>() {
+        return assign(target, color);
+    }
+    if let Some(target) = field.try_downcast_mut::<Srgba>() {
+        return assign(target, Srgba::from(color));
+    }
+    if let Some(target) = field.try_downcast_mut::<LinearRgba>() {
+        return assign(target, LinearRgba::from(color));
+    }
+    FieldWrite::Rejected
+}
+
+/// Parses a `#RRGGBB` or `#RRGGBBAA` code (the `#` is optional) into a color.
+fn parse_hex_color(text: &str) -> Option<Color> {
+    let text = text.trim();
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    if digits.len() != 6 && digits.len() != 8 {
+        return None;
+    }
+    Srgba::hex(digits).ok().map(Color::from)
 }
 
 /// Writes text into a string or `char` field, allocating only when the text differs.
@@ -836,7 +865,15 @@ pub fn sync_details_panel(world: &mut World) {
     };
 
     let inspected = crate::world_to_inspect(world);
-    let components = inspect_components(inspected, selection);
+    let mut components = inspect_components(inspected, selection);
+    if let Some(rank) = world
+        .get_resource::<crate::InspectorComponentOrder>()
+        .and_then(|order| order.0)
+    {
+        components.retain(|component| rank(&component.type_path).is_some());
+        // Stable, so components of equal rank keep their alphabetical order.
+        components.sort_by_key(|component| rank(&component.type_path).unwrap_or_default());
+    }
     let empty = empty_state(inspected, selection, &components);
 
     let index = world.resource::<DetailsIndex>();
@@ -1211,8 +1248,9 @@ fn spawn_field_row(
         FieldValue::Bool(_)
         | FieldValue::Number(_)
         | FieldValue::Text(_)
+        | FieldValue::Color(_)
         | FieldValue::Variant { .. } => Some(widget.entity),
-        FieldValue::Color(_) | FieldValue::Label(_) => None,
+        FieldValue::Label(_) => None,
     };
     if let Some(input) = input
         && let Ok(mut entity) = world.get_entity_mut(input)
@@ -1296,7 +1334,7 @@ fn spawn_widget(world: &mut World, row: Entity, entry: &FieldEntry) -> Option<Fi
                     ChildOf(row),
                 ))
                 .id();
-            let entity = spawn_child_scene(
+            let swatch = spawn_child_scene(
                 world,
                 cell,
                 bsn! {
@@ -1309,10 +1347,12 @@ fn spawn_widget(world: &mut World, row: Entity, entry: &FieldEntry) -> Option<Fi
                     }
                 },
             )?;
-            let text = spawn_value_caption(world, cell, String::new())?;
+            // The hex code is editable: typing a full `#RRGGBB` or `#RRGGBBAA` code sets the
+            // color.
+            let entity = spawn_text_input(world, cell, FIELD_WIDGET_WIDTH - 30.0)?;
             FieldWidget {
                 entity,
-                text: Some(text),
+                text: Some(swatch),
                 value: value.clone(),
             }
         }
@@ -1417,10 +1457,21 @@ fn apply_value(world: &mut World, widget: &FieldWidget, value: &FieldValue) {
         }
         FieldValue::Text(text) => replace_text(world, Some(widget.entity), text),
         FieldValue::Color(color) => {
-            if let Ok(mut entity) = world.get_entity_mut(widget.entity) {
-                entity.insert(ColorSwatchValue(*color));
+            if let Some(mut swatch) = widget
+                .text
+                .and_then(|swatch| world.get_entity_mut(swatch).ok())
+            {
+                swatch.insert(ColorSwatchValue(*color));
             }
-            set_text(world, widget.text, color_to_hex(*color));
+            let hex = color_to_hex(*color);
+            // Leave the input alone while it holds the same color in another spelling, such as
+            // lowercase or without the alpha, so typing is not overwritten.
+            let shown = world
+                .get::<EditableText>(widget.entity)
+                .and_then(|editable| parse_hex_color(&editable.value().to_string()));
+            if shown.map(color_to_hex) != Some(hex.clone()) {
+                replace_text(world, Some(widget.entity), &hex);
+            }
         }
         FieldValue::Variant { .. } => {}
         FieldValue::Label(text) => set_text(world, Some(widget.entity), text.clone()),
@@ -2170,6 +2221,26 @@ mod tests {
             .iter()
             .map(|entry| (entry.path.clone(), entry.value.kind()))
             .collect()
+    }
+
+    #[test]
+    fn hex_codes_write_into_color_fields() {
+        let red = parse_hex_color("#FF0000").unwrap();
+        assert_eq!(parse_hex_color("ff0000ff"), Some(red));
+        assert_eq!(parse_hex_color("#FF00"), None);
+        assert_eq!(parse_hex_color("#GG0000"), None);
+
+        let mut color = Color::WHITE;
+        assert_eq!(write_color_field(&mut color, red), FieldWrite::Written);
+        assert_eq!(color, red);
+        assert_eq!(write_color_field(&mut color, red), FieldWrite::Unchanged);
+
+        let mut linear = LinearRgba::WHITE;
+        assert_eq!(write_color_field(&mut linear, red), FieldWrite::Written);
+        assert_eq!(linear, LinearRgba::RED);
+
+        let mut number = 1.0_f32;
+        assert_eq!(write_color_field(&mut number, red), FieldWrite::Rejected);
     }
 
     #[test]

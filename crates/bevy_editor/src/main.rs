@@ -1,7 +1,8 @@
-//! Runs the editor on a small demo level.
+//! Runs the editor on a small demo level, or on a level file given on the command line.
 //!
 //! ```bash
 //! cargo run -p bevy_editor
+//! cargo run -p bevy_editor -- assets/levels/soft_shadows_point.level.ron
 //! ```
 
 use bevy::{
@@ -9,7 +10,11 @@ use bevy::{
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
 };
-use bevy_editor::{play::in_play_mode, EditorPlugin, LevelEntity};
+use bevy_editor::{
+    play::in_play_mode,
+    primitives::{Primitive, PrimitiveMaterial},
+    EditorPlugin, LevelEntity,
+};
 
 fn main() {
     App::new()
@@ -23,18 +28,41 @@ fn main() {
         }))
         .add_plugins(EditorPlugin)
         .register_type::<Spin>()
-        .add_systems(Startup, demo_level)
+        .add_systems(
+            Startup,
+            (
+                demo_level.run_if(|| level_from_args().is_none()),
+                open_level_from_args.run_if(|| level_from_args().is_some()),
+            ),
+        )
         .add_systems(Update, spin.run_if(in_play_mode))
         .add_systems(Update, screenshot_and_exit)
         .run();
 }
 
+/// The level file passed on the command line, if any.
+fn level_from_args() -> Option<std::path::PathBuf> {
+    std::env::args_os().nth(1).map(std::path::PathBuf::from)
+}
+
+/// Opens the level file passed on the command line.
+fn open_level_from_args(world: &mut World) {
+    let Some(path) = level_from_args() else {
+        return;
+    };
+    if let Err(error) = bevy_editor::level::load_level_from(world, &path) {
+        error!("Could not open {}: {error}", path.display());
+    }
+}
+
 /// When `BEVY_EDITOR_SCREENSHOT` is set to a file path, saves a screenshot there after a few
 /// seconds and exits. Used to check the editor's layout without a person at the screen.
-/// `BEVY_EDITOR_SELECT` can name an entity to select first.
+/// `BEVY_EDITOR_SELECT` can name an entity to select first, and `BEVY_EDITOR_ROUNDTRIP` can name
+/// a level file to save to and reopen first.
 fn screenshot_and_exit(
     time: Res<Time>,
     mut taken: Local<bool>,
+    mut round_tripped: Local<bool>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     names: Query<(Entity, &Name)>,
@@ -44,6 +72,21 @@ fn screenshot_and_exit(
         return;
     };
     let elapsed = time.elapsed_secs();
+    if let Ok(level) = std::env::var("BEVY_EDITOR_ROUNDTRIP")
+        && elapsed > 1.0
+        && !*round_tripped
+    {
+        // Save the level, then open it again, to check that saving loses nothing.
+        *round_tripped = true;
+        commands.queue(move |world: &mut World| {
+            let path = std::path::PathBuf::from(level);
+            let result = bevy_editor::level::save_level_to(world, &path)
+                .and_then(|()| bevy_editor::level::load_level_from(world, &path));
+            if let Err(error) = result {
+                error!("Round trip failed: {error}");
+            }
+        });
+    }
     if !*taken
         && elapsed > 2.0
         && selection.0.is_none()
@@ -76,13 +119,7 @@ fn spin(time: Res<Time>, mut spinners: Query<(&Spin, &mut Transform)>) {
     }
 }
 
-fn demo_level(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let mut material = |color: Color| materials.add(StandardMaterial::from_color(color));
-
+fn demo_level(mut commands: Commands) {
     commands.spawn((
         Name::new("Sun"),
         LevelEntity,
@@ -95,8 +132,10 @@ fn demo_level(
     commands.spawn((
         Name::new("Floor"),
         LevelEntity,
-        Mesh3d(meshes.add(Cuboid::new(12.0, 0.2, 12.0))),
-        MeshMaterial3d(material(Color::srgb(0.3, 0.32, 0.35))),
+        Primitive::Cube {
+            size: Vec3::new(12.0, 0.2, 12.0),
+        },
+        PrimitiveMaterial::color(Color::srgb(0.3, 0.32, 0.35)),
         Transform::from_xyz(0.0, -0.1, 0.0),
     ));
     commands
@@ -109,14 +148,14 @@ fn demo_level(
         .with_children(|props| {
             props.spawn((
                 Name::new("Red Cube"),
-                Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-                MeshMaterial3d(material(Color::srgb(0.8, 0.25, 0.2))),
+                Primitive::default(),
+                PrimitiveMaterial::color(Color::srgb(0.8, 0.25, 0.2)),
                 Transform::from_xyz(-2.0, 0.5, 0.0),
             ));
             props.spawn((
                 Name::new("Blue Cube"),
-                Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-                MeshMaterial3d(material(Color::srgb(0.2, 0.4, 0.85))),
+                Primitive::default(),
+                PrimitiveMaterial::color(Color::srgb(0.2, 0.4, 0.85)),
                 Transform::from_xyz(2.0, 0.5, 0.0),
                 Spin { speed: 0.25 },
             ));
@@ -124,8 +163,13 @@ fn demo_level(
     commands.spawn((
         Name::new("Gold Sphere"),
         LevelEntity,
-        Mesh3d(meshes.add(Sphere::new(0.6))),
-        MeshMaterial3d(material(Color::srgb(0.95, 0.75, 0.25))),
+        Primitive::Sphere { radius: 0.6 },
+        PrimitiveMaterial {
+            base_color: Color::srgb(0.95, 0.75, 0.25),
+            metallic: 1.0,
+            roughness: 0.3,
+            ..default()
+        },
         Transform::from_xyz(0.0, 0.6, -2.5),
         Spin { speed: 0.5 },
     ));
