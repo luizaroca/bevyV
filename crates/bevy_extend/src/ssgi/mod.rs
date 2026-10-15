@@ -1,10 +1,15 @@
 //! Screen-space global illumination (SSGI).
 //!
-//! Work in progress, built in phases (see `notes/ssgi-plan.md` in the project files). This first
-//! phase lays the groundwork: every frame the lit HDR image is copied into a history texture, so
-//! the next frame can gather bounce light from it. Debug views show that history and how well it
-//! lines up with the current frame after reprojecting it with motion vectors. SSGI does not change
-//! lighting yet.
+//! Work in progress, built in phases (see `notes/ssgi-plan.md` in the project files).
+//!
+//! Each frame:
+//! 1. After the prepass, `trace.wesl` gathers bounce light and ambient occlusion for every pixel
+//!    from last frame's lit image (the history), using a visibility bitmask slice march.
+//! 2. After the main pass, the lit image is copied into the history for the next frame, and a
+//!    debug view can replace the image.
+//!
+//! The result is not denoised and does not change lighting yet; it is only visible in the
+//! [debug views](SsgiDebugView).
 
 use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle};
@@ -37,10 +42,17 @@ use bevy_render::{
         SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension,
         TextureFormat, TextureSampleType, TextureUsages, TextureView,
     },
+    render_resource::{
+        binding_types::{texture_depth_2d, texture_storage_2d, uniform_buffer},
+        CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, ShaderType,
+        StorageTextureAccess, UniformBuffer,
+    },
+    renderer::RenderQueue,
     renderer::{RenderContext, RenderDevice, ViewQuery},
     sync_component::SyncComponent,
     texture::{CachedTexture, TextureCache},
     view::{ExtractedView, Msaa, ViewTarget},
+    view::{ViewUniform, ViewUniformOffset, ViewUniforms},
     GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_shader::Shader;
@@ -49,6 +61,9 @@ use tracing::error;
 
 /// Format of the radiance history. Lit HDR color needs more range than 8 bits.
 const HISTORY_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+
+/// Format of the trace output: bounce light in rgb, ambient occlusion in a.
+const GI_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
 /// Adds screen-space global illumination. Part of [`ExtendPlugins`](crate::ExtendPlugins).
 #[derive(Default)]
@@ -60,14 +75,37 @@ pub struct ScreenSpaceGlobalIlluminationPlugin;
 /// image. It needs the depth, normal and motion vector prepasses (added automatically), an
 /// untonemapped main texture ([`TonemappingPass`], also added) and `Msaa::Off`.
 ///
-/// For now it only captures that history and offers [debug views](SsgiDebugView); it does not
-/// change lighting yet.
-#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
+/// For now the result is only visible in the [debug views](SsgiDebugView); it does not change
+/// lighting yet.
+#[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default, Clone, PartialEq)]
 #[require(DepthPrepass, NormalPrepass, MotionVectorPrepass, TonemappingPass)]
 pub struct ScreenSpaceGlobalIllumination {
-    /// Replaces the image with one of SSGI's inputs, for checking them by eye.
+    /// How far away surfaces can send bounce light to a pixel, in meters (world units).
+    ///
+    /// Larger values reach further but get noisier and miss thin details.
+    pub radius: f32,
+    /// How thick surfaces are assumed to be, in meters. The depth buffer only shows the front of
+    /// things, so light can pass behind anything further back than this.
+    pub thickness: f32,
+    /// Directions searched around each pixel per frame. More is smoother and slower.
+    pub slice_count: u32,
+    /// Depth samples taken along each side of a direction. More finds thinner objects.
+    pub samples_per_slice_side: u32,
+    /// Replaces the image with one of SSGI's buffers, for checking them by eye.
     pub debug_view: SsgiDebugView,
+}
+
+impl Default for ScreenSpaceGlobalIllumination {
+    fn default() -> Self {
+        Self {
+            radius: 2.0,
+            thickness: 0.5,
+            slice_count: 4,
+            samples_per_slice_side: 8,
+            debug_view: SsgiDebugView::Off,
+        }
+    }
 }
 
 /// What [`ScreenSpaceGlobalIllumination::debug_view`] shows.
@@ -77,6 +115,11 @@ pub enum SsgiDebugView {
     /// The normal image.
     #[default]
     Off,
+    /// The raw bounce light reaching each pixel, before it is multiplied by the surface color.
+    /// Noisy until denoising lands.
+    BounceLight,
+    /// The raw ambient occlusion from the same trace: white is open, black is enclosed.
+    AmbientOcclusion,
     /// The previous frame's lit image, as stored for SSGI.
     History,
     /// The previous frame moved onto this frame with motion vectors. Should match the normal
@@ -89,8 +132,10 @@ pub enum SsgiDebugView {
 
 impl SsgiDebugView {
     /// Every view, in the order a "next view" key should cycle through them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::Off,
+        Self::BounceLight,
+        Self::AmbientOcclusion,
         Self::History,
         Self::Reprojected,
         Self::ReprojectionError,
@@ -105,6 +150,8 @@ impl SsgiDebugView {
     fn shader_def(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
+            Self::BounceLight => Some("DEBUG_BOUNCE_LIGHT"),
+            Self::AmbientOcclusion => Some("DEBUG_AMBIENT_OCCLUSION"),
             Self::History => Some("DEBUG_HISTORY"),
             Self::Reprojected => Some("DEBUG_REPROJECTED"),
             Self::ReprojectionError => Some("DEBUG_REPROJECTION_ERROR"),
@@ -115,6 +162,7 @@ impl SsgiDebugView {
 impl Plugin for ScreenSpaceGlobalIlluminationPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "ssgi.wesl");
+        embedded_asset!(app, "trace.wesl");
 
         app.add_plugins(ExtractComponentPlugin::<ScreenSpaceGlobalIllumination>::default());
 
@@ -129,21 +177,29 @@ impl Plugin for ScreenSpaceGlobalIlluminationPlugin {
                 Render,
                 (
                     prepare_ssgi_pipelines.in_set(RenderSystems::Prepare),
-                    prepare_ssgi_history_textures.in_set(RenderSystems::PrepareResources),
+                    (prepare_ssgi_textures, prepare_ssgi_settings)
+                        .in_set(RenderSystems::PrepareResources),
                 ),
             )
             .add_systems(
                 Core3d,
-                // After lighting and transparents, before TAA and other post-processing.
-                screen_space_global_illumination
-                    .after(Core3dSystems::MainPass)
-                    .before(Core3dSystems::EarlyPostProcess),
+                (
+                    // Needs this frame's depth, normals and motion vectors, and must finish
+                    // before the main pass so lighting can use it (from phase 3).
+                    ssgi_trace
+                        .after(Core3dSystems::Prepass)
+                        .before(Core3dSystems::MainPass),
+                    // After lighting and transparents, before TAA and other post-processing.
+                    ssgi_store_history_and_debug
+                        .after(Core3dSystems::MainPass)
+                        .before(Core3dSystems::EarlyPostProcess),
+                ),
             );
     }
 }
 
 impl SyncComponent<RenderApp> for ScreenSpaceGlobalIllumination {
-    type Target = (Self, SsgiHistoryTextures, SsgiPipelineIds);
+    type Target = (Self, SsgiTextures, SsgiPipelineIds, SsgiSettingsBuffer);
 }
 
 impl ExtractComponent<RenderApp> for ScreenSpaceGlobalIllumination {
@@ -163,15 +219,17 @@ impl ExtractComponent<RenderApp> for ScreenSpaceGlobalIllumination {
     }
 }
 
-/// The radiance history: last frame's image is read while this frame's is written. The two
-/// textures swap every frame.
+/// A view's SSGI textures. The radiance history is a pair: last frame's image is read while this
+/// frame's is written, and they swap every frame.
 #[derive(Component)]
-pub struct SsgiHistoryTextures {
-    write: CachedTexture,
-    read: CachedTexture,
+pub struct SsgiTextures {
+    history_write: CachedTexture,
+    history_read: CachedTexture,
+    /// Trace output: bounce light in rgb, ambient occlusion in a.
+    gi: CachedTexture,
 }
 
-fn prepare_ssgi_history_textures(
+fn prepare_ssgi_textures(
     mut commands: Commands,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
@@ -195,23 +253,85 @@ fn prepare_ssgi_history_textures(
         descriptor.label = Some("ssgi_history_1_texture");
         let history_1 = texture_cache.get(&render_device, descriptor.clone());
         descriptor.label = Some("ssgi_history_2_texture");
-        let history_2 = texture_cache.get(&render_device, descriptor);
+        let history_2 = texture_cache.get(&render_device, descriptor.clone());
 
-        let (write, read) = if frame_count.0.is_multiple_of(2) {
+        let gi = texture_cache.get(
+            &render_device,
+            TextureDescriptor {
+                label: Some("ssgi_gi_texture"),
+                format: GI_FORMAT,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+                ..descriptor
+            },
+        );
+
+        let (history_write, history_read) = if frame_count.0.is_multiple_of(2) {
             (history_1, history_2)
         } else {
             (history_2, history_1)
         };
-        commands
-            .entity(entity)
-            .insert(SsgiHistoryTextures { write, read });
+        commands.entity(entity).insert(SsgiTextures {
+            history_write,
+            history_read,
+            gi,
+        });
     }
 }
 
-/// Shared bind group layout, sampler and shader for SSGI's passes.
+/// Settings as the trace shader reads them.
+#[derive(ShaderType, Clone, Default)]
+struct SsgiSettingsUniform {
+    radius: f32,
+    thickness: f32,
+    slice_count: u32,
+    samples_per_slice_side: u32,
+    frame: u32,
+}
+
+/// A view's settings uniform for the trace.
+#[derive(Component, Default)]
+pub struct SsgiSettingsBuffer(UniformBuffer<SsgiSettingsUniform>);
+
+fn prepare_ssgi_settings(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    frame_count: Res<FrameCount>,
+    mut views: Query<(
+        Entity,
+        &ScreenSpaceGlobalIllumination,
+        Option<&mut SsgiSettingsBuffer>,
+    )>,
+) {
+    for (entity, ssgi, buffer) in &mut views {
+        let uniform = SsgiSettingsUniform {
+            radius: ssgi.radius.max(0.01),
+            thickness: ssgi.thickness.max(0.0),
+            slice_count: ssgi.slice_count.max(1),
+            samples_per_slice_side: ssgi.samples_per_slice_side.max(1),
+            frame: frame_count.0,
+        };
+        match buffer {
+            Some(mut buffer) => {
+                buffer.0.set(uniform);
+                buffer.0.write_buffer(&render_device, &render_queue);
+            }
+            None => {
+                let mut buffer = UniformBuffer::from(uniform);
+                buffer.set_label(Some("ssgi_settings"));
+                buffer.write_buffer(&render_device, &render_queue);
+                commands.entity(entity).insert(SsgiSettingsBuffer(buffer));
+            }
+        }
+    }
+}
+
+/// Bind group layouts, samplers, shaders and the trace pipeline for SSGI's passes.
 #[derive(Resource)]
 pub struct SsgiPipeline {
     layout: BindGroupLayoutDescriptor,
+    trace_layout: BindGroupLayoutDescriptor,
+    trace_pipeline: CachedComputePipelineId,
     sampler: Sampler,
     fullscreen_shader: FullscreenShader,
     fragment_shader: Handle<Shader>,
@@ -220,6 +340,7 @@ pub struct SsgiPipeline {
 fn init_ssgi_pipeline(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
+    pipeline_cache: Res<PipelineCache>,
     fullscreen_shader: Res<FullscreenShader>,
     asset_server: Res<AssetServer>,
 ) {
@@ -235,9 +356,36 @@ fn init_ssgi_pipeline(
                 // Motion vectors
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
+                // Trace output
+                texture_2d(TextureSampleType::Float { filterable: true }),
             ),
         ),
     );
+    let trace_layout = BindGroupLayoutDescriptor::new(
+        "ssgi_trace_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_depth_2d(),
+                // Normals
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                // Motion vectors
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                // History
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                texture_storage_2d(GI_FORMAT, StorageTextureAccess::WriteOnly),
+                uniform_buffer::<ViewUniform>(true),
+                uniform_buffer::<SsgiSettingsUniform>(false),
+            ),
+        ),
+    );
+    let trace_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+        label: Some("ssgi_trace_pipeline".into()),
+        layout: vec![trace_layout.clone()],
+        shader: load_embedded_asset!(asset_server.as_ref(), "trace.wesl"),
+        entry_point: Some("trace".into()),
+        ..default()
+    });
     let sampler = render_device.create_sampler(&SamplerDescriptor {
         label: Some("ssgi_linear_sampler"),
         mag_filter: FilterMode::Linear,
@@ -246,6 +394,8 @@ fn init_ssgi_pipeline(
     });
     commands.insert_resource(SsgiPipeline {
         layout,
+        trace_layout,
+        trace_pipeline,
         sampler,
         fullscreen_shader: fullscreen_shader.clone(),
         fragment_shader: load_embedded_asset!(asset_server.as_ref(), "ssgi.wesl"),
@@ -333,19 +483,86 @@ fn prepare_ssgi_pipelines(
     }
 }
 
+/// Gathers bounce light and ambient occlusion into the GI texture.
+fn ssgi_trace(
+    view: ViewQuery<(
+        &ExtractedCamera,
+        &ViewPrepassTextures,
+        &SsgiTextures,
+        &SsgiSettingsBuffer,
+        &ViewUniformOffset,
+    )>,
+    ssgi_pipeline: Res<SsgiPipeline>,
+    pipeline_cache: Res<PipelineCache>,
+    view_uniforms: Res<ViewUniforms>,
+    mut ctx: RenderContext,
+) {
+    let (camera, prepass_textures, textures, settings, view_uniform_offset) = view.into_inner();
+    let (
+        Some(viewport_size),
+        Some(depth),
+        Some(normals),
+        Some(motion_vectors),
+        Some(view_binding),
+        Some(settings_binding),
+        Some(trace_pipeline),
+    ) = (
+        camera.physical_viewport_size,
+        prepass_textures.depth_only_view(),
+        prepass_textures.normal_view(),
+        prepass_textures.motion_vectors_view(),
+        view_uniforms.uniforms.binding(),
+        settings.0.binding(),
+        pipeline_cache.get_compute_pipeline(ssgi_pipeline.trace_pipeline),
+    )
+    else {
+        return;
+    };
+
+    let bind_group = ctx.render_device().create_bind_group(
+        Some("ssgi_trace_bind_group"),
+        &pipeline_cache.get_bind_group_layout(&ssgi_pipeline.trace_layout),
+        &BindGroupEntries::sequential((
+            depth,
+            normals,
+            motion_vectors,
+            &textures.history_read.default_view,
+            &textures.gi.default_view,
+            view_binding,
+            settings_binding,
+        )),
+    );
+
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let time_span = diagnostics.time_span(ctx.command_encoder(), "ssgi_trace");
+    {
+        let mut pass = ctx
+            .command_encoder()
+            .begin_compute_pass(&ComputePassDescriptor {
+                label: Some("ssgi_trace"),
+                timestamp_writes: None,
+            });
+        pass.set_pipeline(trace_pipeline);
+        pass.set_bind_group(0, &bind_group, &[view_uniform_offset.offset]);
+        pass.dispatch_workgroups(viewport_size.x.div_ceil(8), viewport_size.y.div_ceil(8), 1);
+    }
+    time_span.end(ctx.command_encoder());
+}
+
 /// Copies the lit image into the history and, when a debug view is on, draws it over the image.
-fn screen_space_global_illumination(
+fn ssgi_store_history_and_debug(
     view: ViewQuery<(
         &ViewTarget,
         &ViewPrepassTextures,
-        &SsgiHistoryTextures,
+        &SsgiTextures,
         &SsgiPipelineIds,
     )>,
     ssgi_pipeline: Res<SsgiPipeline>,
     pipeline_cache: Res<PipelineCache>,
     mut ctx: RenderContext,
 ) {
-    let (view_target, prepass_textures, history, pipeline_ids) = view.into_inner();
+    let (view_target, prepass_textures, textures, pipeline_ids) = view.into_inner();
     let Some(motion_vectors) = prepass_textures.motion_vectors_view() else {
         return;
     };
@@ -359,9 +576,10 @@ fn screen_space_global_illumination(
             &layout,
             &BindGroupEntries::sequential((
                 image,
-                &history.read.default_view,
+                &textures.history_read.default_view,
                 motion_vectors,
                 &ssgi_pipeline.sampler,
+                &textures.gi.default_view,
             )),
         )
     };
@@ -376,7 +594,7 @@ fn screen_space_global_illumination(
         let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("ssgi_copy_history"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: &history.write.default_view,
+                view: &textures.history_write.default_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations::default(),

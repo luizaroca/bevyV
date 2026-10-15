@@ -4,20 +4,23 @@
 //! a short block, and a light near the ceiling. With bounce light, the white surfaces pick up red
 //! and green near the side walls, which makes SSGI easy to judge by eye.
 //!
-//! SSGI is being built in phases. So far it only stores the previous frame's lit image and offers
-//! debug views of it; lighting itself does not change yet.
+//! SSGI is being built in phases. So far it traces raw (noisy) bounce light and ambient occlusion
+//! from the previous frame's lit image, visible only in the debug views; lighting itself does not
+//! change yet.
 //!
 //! Run it with `cargo run -p bevy_extend_sandbox --bin ssgi --release`.
 //!
 //! Controls:
-//! - G: cycle the SSGI debug view (off, history, reprojected history, reprojection error)
+//! - G: cycle the SSGI debug view (off, bounce light, ambient occlusion, history, reprojected
+//!   history, reprojection error)
+//! - `[` and `]`: shrink or grow the SSGI radius
 //! - P: pause or resume the spinning block
 //! - T: toggle temporal antialiasing (TAA)
 //! - F12: save a screenshot next to where the app was started
 //! - Hold right click (or press M) to look around, WASD to move, Q/E to go down/up
 //!
 //! For automated checks, `SSGI_AUTOSHOT=path.png` saves a screenshot after a short warm-up and
-//! quits, `SSGI_DEBUG=off|history|reprojected|error` picks the starting debug view,
+//! quits, `SSGI_DEBUG=off|bounce|ao|history|reprojected|error` picks the starting debug view,
 //! `SSGI_ORBIT=1` slowly swings the camera so reprojection can be checked while moving, and
 //! `SSGI_TAA=0` starts with TAA off.
 
@@ -46,6 +49,7 @@ const AUTOSHOT_FRAME: u32 = 120;
 #[derive(Resource)]
 struct Settings {
     debug_view: SsgiDebugView,
+    radius: f32,
     taa: bool,
     spinning: bool,
     orbit: bool,
@@ -54,6 +58,8 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let debug_view = match std::env::var("SSGI_DEBUG").as_deref() {
+            Ok("bounce") => SsgiDebugView::BounceLight,
+            Ok("ao") => SsgiDebugView::AmbientOcclusion,
             Ok("history") => SsgiDebugView::History,
             Ok("reprojected") => SsgiDebugView::Reprojected,
             Ok("error") => SsgiDebugView::ReprojectionError,
@@ -61,6 +67,7 @@ impl Default for Settings {
         };
         Self {
             debug_view,
+            radius: ScreenSpaceGlobalIllumination::default().radius,
             taa: std::env::var("SSGI_TAA").map_or(true, |value| value != "0"),
             spinning: true,
             orbit: std::env::var("SSGI_ORBIT").is_ok_and(|value| value == "1"),
@@ -229,6 +236,12 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>)
     if keys.just_pressed(KeyCode::KeyG) {
         settings.debug_view = settings.debug_view.next();
     }
+    if keys.just_pressed(KeyCode::BracketLeft) {
+        settings.radius = (settings.radius / 1.25).max(0.25);
+    }
+    if keys.just_pressed(KeyCode::BracketRight) {
+        settings.radius = (settings.radius * 1.25).min(8.0);
+    }
     if keys.just_pressed(KeyCode::KeyP) {
         settings.spinning = !settings.spinning;
     }
@@ -249,6 +262,7 @@ fn apply_settings(
 
     for (camera, mut ssgi) in &mut cameras {
         ssgi.debug_view = settings.debug_view;
+        ssgi.radius = settings.radius;
         if settings.taa {
             commands
                 .entity(camera)
@@ -261,15 +275,19 @@ fn apply_settings(
     let on_off = |on: bool| if on { "on" } else { "off" };
     let debug_view = match settings.debug_view {
         SsgiDebugView::Off => "off",
+        SsgiDebugView::BounceLight => "bounce light (raw, noisy)",
+        SsgiDebugView::AmbientOcclusion => "ambient occlusion (raw, noisy)",
         SsgiDebugView::History => "history (last frame)",
         SsgiDebugView::Reprojected => "reprojected history (magenta: newly visible)",
         SsgiDebugView::ReprojectionError => "reprojection error (black is good)",
     };
     help.0 = format!(
-        "SSGI test (Bevy Extend), phase 1: history only, no lighting change yet\n\
+        "SSGI test (Bevy Extend), phase 2: raw trace in debug views, no lighting change yet\n\
          [G] Debug view: {debug_view}\n\
+         [ / ] Radius: {:.2} m\n\
          [P] Spinning block: {}\n\
          [T] TAA: {}",
+        settings.radius,
         on_off(settings.spinning),
         on_off(settings.taa),
     );

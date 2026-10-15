@@ -1,4 +1,4 @@
-//! Screen-space global illumination, phase 1: radiance history and its debug views.
+//! Screen-space global illumination: storing the radiance history, and the debug views.
 
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 
@@ -6,6 +6,7 @@ import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 @group(0) @binding(1) var history: texture_2d<f32>;
 @group(0) @binding(2) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(3) var linear_sampler: sampler;
+@group(0) @binding(4) var gi: texture_2d<f32>;
 
 /// Copies this frame's lit image into the history texture.
 @fragment
@@ -29,6 +30,10 @@ fn debug_view(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let off_screen = any(previous_uv != saturate(previous_uv));
 
     var color = textureSampleLevel(history, linear_sampler, in.uv, 0.0).rgb;
+    @if(DEBUG_BOUNCE_LIGHT)
+    color = textureLoad(gi, pixel, 0).rgb;
+    @if(DEBUG_AMBIENT_OCCLUSION)
+    color = vec3(textureLoad(gi, pixel, 0).a);
     @if(DEBUG_REPROJECTED)
     color = select(reprojected, vec3(1.0, 0.0, 1.0), off_screen);
     // Error relative to brightness, so dark and bright areas read the same.
