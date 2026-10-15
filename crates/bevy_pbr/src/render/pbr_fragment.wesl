@@ -539,8 +539,8 @@ pbr_input.material.uv_transform = uv_transform;
 @if(SCREEN_SPACE_AMBIENT_OCCLUSION) {
         let ssao_tex_pos = vec2<i32>(in.position.xy - view.viewport.xy);
         let ssao = textureLoad(screen_space_ambient_occlusion_texture, ssao_tex_pos, 0i).r;
-        let ssao_multibounce = ssao_multibounce(ssao, pbr_input.material.base_color.rgb);
-        diffuse_occlusion = min(diffuse_occlusion, ssao_multibounce);
+        let ssao_occlusion = ssao_multibounce(ssao, pbr_input.material.base_color.rgb);
+        diffuse_occlusion = min(diffuse_occlusion, ssao_occlusion);
         // Use SSAO to estimate the specular occlusion.
         // Lagarde and Rousiers 2014, "Moving Frostbite to Physically Based Rendering"
         let roughness = lighting::perceptualRoughnessToRoughness(pbr_input.material.perceptual_roughness);
