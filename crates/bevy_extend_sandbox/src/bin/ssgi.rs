@@ -14,6 +14,8 @@
 //! - G: cycle the SSGI debug view (off, bounce light, ambient occlusion, history, reprojected
 //!   history, reprojection error)
 //! - `[` and `]`: shrink or grow the SSGI radius
+//! - N: turn denoising on and off, to see the raw trace
+//! - H: trace at half resolution (faster, slightly softer)
 //! - P: pause or resume the spinning block
 //! - T: toggle temporal antialiasing (TAA)
 //! - F12: save a screenshot next to where the app was started
@@ -22,8 +24,9 @@
 //! For automated checks, `SSGI_AUTOSHOT=path.png` saves a screenshot after a short warm-up and
 //! quits, `SSGI_DEBUG=off|bounce|ao|history|reprojected|error` picks the starting debug view,
 //! `SSGI_ORBIT=1` slowly swings the camera so reprojection can be checked while moving, and
-//! `SSGI_TAA=0` starts with TAA off, `SSGI=0` starts with SSGI off, and `SSGI_DEFERRED=1`
-//! renders with Bevy's deferred renderer instead of forward.
+//! `SSGI_TAA=0` starts with TAA off, `SSGI=0` starts with SSGI off, `SSGI_DENOISE=0` starts
+//! with denoising off, `SSGI_HALF=1` starts at half resolution, `SSGI_SPIN=0` starts with the block still, and `SSGI_DEFERRED=1` renders
+//! with Bevy's deferred renderer instead of forward.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
@@ -54,6 +57,8 @@ struct Settings {
     ssgi: bool,
     debug_view: SsgiDebugView,
     radius: f32,
+    denoise: bool,
+    half_resolution: bool,
     taa: bool,
     spinning: bool,
     orbit: bool,
@@ -73,8 +78,10 @@ impl Default for Settings {
             ssgi: std::env::var("SSGI").map_or(true, |value| value != "0"),
             debug_view,
             radius: ScreenSpaceGlobalIllumination::default().radius,
+            denoise: std::env::var("SSGI_DENOISE").map_or(true, |value| value != "0"),
+            half_resolution: std::env::var("SSGI_HALF").is_ok_and(|value| value == "1"),
             taa: std::env::var("SSGI_TAA").map_or(true, |value| value != "0"),
-            spinning: true,
+            spinning: std::env::var("SSGI_SPIN").map_or(true, |value| value != "0"),
             orbit: std::env::var("SSGI_ORBIT").is_ok_and(|value| value == "1"),
         }
     }
@@ -259,6 +266,12 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>)
     if keys.just_pressed(KeyCode::Space) {
         settings.ssgi = !settings.ssgi;
     }
+    if keys.just_pressed(KeyCode::KeyN) {
+        settings.denoise = !settings.denoise;
+    }
+    if keys.just_pressed(KeyCode::KeyH) {
+        settings.half_resolution = !settings.half_resolution;
+    }
     if keys.just_pressed(KeyCode::KeyP) {
         settings.spinning = !settings.spinning;
     }
@@ -284,6 +297,8 @@ fn apply_settings(
                 .insert(ScreenSpaceGlobalIllumination {
                     radius: settings.radius,
                     debug_view: settings.debug_view,
+                    denoise: settings.denoise,
+                    half_resolution: settings.half_resolution,
                     ..default()
                 });
         } else {
@@ -303,21 +318,25 @@ fn apply_settings(
     let on_off = |on: bool| if on { "on" } else { "off" };
     let debug_view = match settings.debug_view {
         SsgiDebugView::Off => "off",
-        SsgiDebugView::BounceLight => "bounce light (raw, noisy)",
-        SsgiDebugView::AmbientOcclusion => "ambient occlusion (raw, noisy)",
+        SsgiDebugView::BounceLight => "bounce light",
+        SsgiDebugView::AmbientOcclusion => "ambient occlusion",
         SsgiDebugView::History => "history (last frame)",
         SsgiDebugView::Reprojected => "reprojected history (magenta: newly visible)",
         SsgiDebugView::ReprojectionError => "reprojection error (black is good)",
     };
     help.0 = format!(
-        "SSGI test (Bevy Extend), phase 3: lighting, not denoised yet\n\
+        "SSGI test (Bevy Extend), phase 4: denoised\n\
          [Space] SSGI: {}\n\
          [G] Debug view: {debug_view}\n\
          [ / ] Radius: {:.2} m\n\
+         [N] Denoise: {}\n\
+         [H] Half resolution: {}\n\
          [P] Spinning block: {}\n\
          [T] TAA: {}",
         on_off(settings.ssgi),
         settings.radius,
+        on_off(settings.denoise),
+        on_off(settings.half_resolution),
         on_off(settings.spinning),
         on_off(settings.taa),
     );

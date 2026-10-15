@@ -4,14 +4,15 @@
 //!
 //! Each frame:
 //! 1. After the prepass, `trace.wesl` gathers bounce light and ambient occlusion for every pixel
-//!    from last frame's lit image (the history), using a visibility bitmask slice march.
-//! 2. The main pass (forward or deferred) adds that bounce light to each surface's indirect
+//!    (or one pixel in four, at half resolution) from last frame's lit image (the history), using
+//!    a visibility bitmask slice march. The result is noisy.
+//! 2. `temporal.wesl` averages it over frames, following motion vectors, and `spatial.wesl`
+//!    blurs it along surfaces without crossing edges.
+//! 3. The main pass (forward or deferred) adds that bounce light to each surface's indirect
 //!    light and uses the occlusion like SSAO, through the `ScreenSpaceIndirectLight` hook this fork
 //!    adds to `bevy_pbr`.
-//! 3. After the main pass, the lit image is copied into the history for the next frame, so light
+//! 4. After the main pass, the lit image is copied into the history for the next frame, so light
 //!    keeps bouncing over frames, and a debug view can replace the image.
-//!
-//! The result is not denoised yet, so it relies on TAA to smooth the noise.
 
 use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle};
@@ -30,6 +31,7 @@ use bevy_ecs::{
     system::{lifetimeless::Read, Commands, Query, Res, ResMut},
 };
 use bevy_image::ToExtents;
+use bevy_math::UVec2;
 use bevy_pbr::{ScreenSpaceIndirectLight, ScreenSpaceIndirectLightTexture};
 use bevy_reflect::{std_traits::ReflectDefault, Reflect};
 use bevy_render::{
@@ -65,8 +67,15 @@ use tracing::error;
 /// Format of the radiance history. Lit HDR color needs more range than 8 bits.
 const HISTORY_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
-/// Format of the trace output: bounce light in rgb, ambient occlusion in a.
+/// Format of the trace, accumulation and final textures: bounce light in rgb, ambient
+/// occlusion in a.
 const GI_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+
+/// Format of the traced pixels' distances (half resolution upsampling).
+const RAW_DEPTH_FORMAT: TextureFormat = TextureFormat::R32Float;
+
+/// Format of the accumulation's bookkeeping: distance and number of frames averaged.
+const META_FORMAT: TextureFormat = TextureFormat::Rg32Float;
 
 /// Adds screen-space global illumination. Part of [`ExtendPlugins`](crate::ExtendPlugins).
 #[derive(Default)]
@@ -78,8 +87,7 @@ pub struct ScreenSpaceGlobalIlluminationPlugin;
 /// image. It needs the depth, normal and motion vector prepasses (added automatically), an
 /// untonemapped main texture ([`TonemappingPass`], also added) and `Msaa::Off`.
 ///
-/// The bounce light is still raw and noisy, so for now use it together with TAA
-/// (`TemporalAntiAliasing`), which averages the noise over frames.
+/// SSGI denoises its own output, so it works without TAA, but TAA still smooths what is left.
 #[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default, Clone, PartialEq)]
 #[require(DepthPrepass, NormalPrepass, MotionVectorPrepass, TonemappingPass)]
@@ -97,6 +105,14 @@ pub struct ScreenSpaceGlobalIllumination {
     pub slice_count: u32,
     /// Depth samples taken along each side of a direction. More finds thinner objects.
     pub samples_per_slice_side: u32,
+    /// Trace one pixel in four each frame (a different one every frame) and fill in the rest from
+    /// neighbors at a similar distance. About four times cheaper, slightly softer.
+    pub half_resolution: bool,
+    /// Average over frames and blur along surfaces. Turn off to see the raw trace.
+    pub denoise: bool,
+    /// The most frames averaged together. More is smoother; fewer reacts faster when lighting
+    /// changes.
+    pub max_history_frames: u32,
     /// Replaces the image with one of SSGI's buffers, for checking them by eye.
     pub debug_view: SsgiDebugView,
 }
@@ -109,6 +125,9 @@ impl Default for ScreenSpaceGlobalIllumination {
             thickness: 0.5,
             slice_count: 4,
             samples_per_slice_side: 8,
+            half_resolution: false,
+            denoise: true,
+            max_history_frames: 16,
             debug_view: SsgiDebugView::Off,
         }
     }
@@ -121,10 +140,10 @@ pub enum SsgiDebugView {
     /// The normal image.
     #[default]
     Off,
-    /// The raw bounce light reaching each pixel, before it is multiplied by the surface color.
-    /// Noisy until denoising lands.
+    /// The bounce light reaching each pixel, before it is multiplied by the surface color. Shows
+    /// the denoised result, or the raw trace when `denoise` is off.
     BounceLight,
-    /// The raw ambient occlusion from the same trace: white is open, black is enclosed.
+    /// The ambient occlusion from the same trace: white is open, black is enclosed.
     AmbientOcclusion,
     /// The previous frame's lit image, as stored for SSGI.
     History,
@@ -169,6 +188,8 @@ impl Plugin for ScreenSpaceGlobalIlluminationPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "ssgi.wesl");
         embedded_asset!(app, "trace.wesl");
+        embedded_asset!(app, "temporal.wesl");
+        embedded_asset!(app, "spatial.wesl");
 
         app.add_plugins(ExtractComponentPlugin::<ScreenSpaceGlobalIllumination>::default());
 
@@ -239,7 +260,16 @@ impl ExtractComponent<RenderApp> for ScreenSpaceGlobalIllumination {
 pub struct SsgiTextures {
     history_write: CachedTexture,
     history_read: CachedTexture,
-    /// Trace output: bounce light in rgb, ambient occlusion in a.
+    /// Raw trace output, viewport-relative, half size at half resolution.
+    raw: CachedTexture,
+    /// Distance of each traced pixel, same layout as `raw`.
+    raw_depth: CachedTexture,
+    /// Running average and its bookkeeping, swapped every frame like the history.
+    accumulated_write: CachedTexture,
+    accumulated_read: CachedTexture,
+    meta_write: CachedTexture,
+    meta_read: CachedTexture,
+    /// Final denoised output that lighting reads.
     gi: CachedTexture,
 }
 
@@ -248,9 +278,9 @@ fn prepare_ssgi_textures(
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
     frame_count: Res<FrameCount>,
-    cameras: Query<(Entity, &ExtractedCamera), With<ScreenSpaceGlobalIllumination>>,
+    cameras: Query<(Entity, &ExtractedCamera, &ScreenSpaceGlobalIllumination)>,
 ) {
-    for (entity, camera) in &cameras {
+    for (entity, camera, ssgi) in &cameras {
         let Some(size) = camera.physical_target_size else {
             continue;
         };
@@ -269,26 +299,53 @@ fn prepare_ssgi_textures(
         descriptor.label = Some("ssgi_history_2_texture");
         let history_2 = texture_cache.get(&render_device, descriptor.clone());
 
-        let gi = texture_cache.get(
-            &render_device,
-            TextureDescriptor {
-                label: Some("ssgi_gi_texture"),
-                format: GI_FORMAT,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                ..descriptor
-            },
-        );
+        let mut storage = |label: &'static str, format: TextureFormat, size: UVec2| {
+            texture_cache.get(
+                &render_device,
+                TextureDescriptor {
+                    label: Some(label),
+                    size: size.to_extents(),
+                    format,
+                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+                    ..descriptor.clone()
+                },
+            )
+        };
+        let raw_size = if ssgi.half_resolution {
+            (size + UVec2::ONE) / 2
+        } else {
+            size
+        };
+        let raw = storage("ssgi_raw_texture", GI_FORMAT, raw_size);
+        let raw_depth = storage("ssgi_raw_depth_texture", RAW_DEPTH_FORMAT, raw_size);
+        let accumulated_1 = storage("ssgi_accumulated_1_texture", GI_FORMAT, size);
+        let accumulated_2 = storage("ssgi_accumulated_2_texture", GI_FORMAT, size);
+        let meta_1 = storage("ssgi_meta_1_texture", META_FORMAT, size);
+        let meta_2 = storage("ssgi_meta_2_texture", META_FORMAT, size);
+        let gi = storage("ssgi_gi_texture", GI_FORMAT, size);
 
-        let (history_write, history_read) = if frame_count.0.is_multiple_of(2) {
+        let even = frame_count.0.is_multiple_of(2);
+        let (history_write, history_read) = if even {
             (history_1, history_2)
         } else {
             (history_2, history_1)
+        };
+        let (accumulated_write, accumulated_read, meta_write, meta_read) = if even {
+            (accumulated_1, accumulated_2, meta_1, meta_2)
+        } else {
+            (accumulated_2, accumulated_1, meta_2, meta_1)
         };
         commands.entity(entity).insert((
             ScreenSpaceIndirectLightTexture(gi.default_view.clone()),
             SsgiTextures {
                 history_write,
                 history_read,
+                raw,
+                raw_depth,
+                accumulated_write,
+                accumulated_read,
+                meta_write,
+                meta_read,
                 gi,
             },
         ));
@@ -304,6 +361,9 @@ struct SsgiSettingsUniform {
     slice_count: u32,
     samples_per_slice_side: u32,
     frame: u32,
+    half_resolution: u32,
+    denoise: u32,
+    max_history_frames: u32,
 }
 
 /// A view's settings uniform for the trace.
@@ -329,6 +389,9 @@ fn prepare_ssgi_settings(
             slice_count: ssgi.slice_count.max(1),
             samples_per_slice_side: ssgi.samples_per_slice_side.max(1),
             frame: frame_count.0,
+            half_resolution: ssgi.half_resolution.into(),
+            denoise: ssgi.denoise.into(),
+            max_history_frames: ssgi.max_history_frames.max(1),
         };
         match buffer {
             Some(mut buffer) => {
@@ -351,6 +414,10 @@ pub struct SsgiPipeline {
     layout: BindGroupLayoutDescriptor,
     trace_layout: BindGroupLayoutDescriptor,
     trace_pipeline: CachedComputePipelineId,
+    temporal_layout: BindGroupLayoutDescriptor,
+    temporal_pipeline: CachedComputePipelineId,
+    spatial_layout: BindGroupLayoutDescriptor,
+    spatial_pipeline: CachedComputePipelineId,
     sampler: Sampler,
     fullscreen_shader: FullscreenShader,
     fragment_shader: Handle<Shader>,
@@ -393,10 +460,69 @@ fn init_ssgi_pipeline(
                 // History
                 texture_2d(TextureSampleType::Float { filterable: false }),
                 texture_storage_2d(GI_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(RAW_DEPTH_FORMAT, StorageTextureAccess::WriteOnly),
                 uniform_buffer::<ViewUniform>(true),
                 uniform_buffer::<SsgiSettingsUniform>(false),
             ),
         ),
+    );
+    let unfilterable = || texture_2d(TextureSampleType::Float { filterable: false });
+    let temporal_layout = BindGroupLayoutDescriptor::new(
+        "ssgi_temporal_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_depth_2d(),
+                // Motion vectors, raw trace, raw depth, accumulated and meta from last frame
+                unfilterable(),
+                unfilterable(),
+                unfilterable(),
+                unfilterable(),
+                unfilterable(),
+                texture_storage_2d(GI_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(META_FORMAT, StorageTextureAccess::WriteOnly),
+                uniform_buffer::<ViewUniform>(true),
+                uniform_buffer::<SsgiSettingsUniform>(false),
+            ),
+        ),
+    );
+    let spatial_layout = BindGroupLayoutDescriptor::new(
+        "ssgi_spatial_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_depth_2d(),
+                // Normals, accumulated and meta from this frame
+                unfilterable(),
+                unfilterable(),
+                unfilterable(),
+                texture_storage_2d(GI_FORMAT, StorageTextureAccess::WriteOnly),
+                uniform_buffer::<ViewUniform>(true),
+                uniform_buffer::<SsgiSettingsUniform>(false),
+            ),
+        ),
+    );
+    let compute_pipeline =
+        |label: &'static str, layout: &BindGroupLayoutDescriptor, shader, entry: &'static str| {
+            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+                label: Some(label.into()),
+                layout: vec![layout.clone()],
+                shader,
+                entry_point: Some(entry.into()),
+                ..default()
+            })
+        };
+    let temporal_pipeline = compute_pipeline(
+        "ssgi_temporal_pipeline",
+        &temporal_layout,
+        load_embedded_asset!(asset_server.as_ref(), "temporal.wesl"),
+        "temporal",
+    );
+    let spatial_pipeline = compute_pipeline(
+        "ssgi_spatial_pipeline",
+        &spatial_layout,
+        load_embedded_asset!(asset_server.as_ref(), "spatial.wesl"),
+        "spatial",
     );
     let trace_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("ssgi_trace_pipeline".into()),
@@ -415,6 +541,10 @@ fn init_ssgi_pipeline(
         layout,
         trace_layout,
         trace_pipeline,
+        temporal_layout,
+        temporal_pipeline,
+        spatial_layout,
+        spatial_pipeline,
         sampler,
         fullscreen_shader: fullscreen_shader.clone(),
         fragment_shader: load_embedded_asset!(asset_server.as_ref(), "ssgi.wesl"),
@@ -502,10 +632,11 @@ fn prepare_ssgi_pipelines(
     }
 }
 
-/// Gathers bounce light and ambient occlusion into the GI texture.
+/// Traces bounce light and ambient occlusion, then denoises it into the GI texture.
 fn ssgi_trace(
     view: ViewQuery<(
         &ExtractedCamera,
+        &ScreenSpaceGlobalIllumination,
         &ViewPrepassTextures,
         &SsgiTextures,
         &SsgiSettingsBuffer,
@@ -516,7 +647,8 @@ fn ssgi_trace(
     view_uniforms: Res<ViewUniforms>,
     mut ctx: RenderContext,
 ) {
-    let (camera, prepass_textures, textures, settings, view_uniform_offset) = view.into_inner();
+    let (camera, ssgi, prepass_textures, textures, settings, view_uniform_offset) =
+        view.into_inner();
     let (
         Some(viewport_size),
         Some(depth),
@@ -525,6 +657,8 @@ fn ssgi_trace(
         Some(view_binding),
         Some(settings_binding),
         Some(trace_pipeline),
+        Some(temporal_pipeline),
+        Some(spatial_pipeline),
     ) = (
         camera.physical_viewport_size,
         prepass_textures.depth_only_view(),
@@ -533,12 +667,15 @@ fn ssgi_trace(
         view_uniforms.uniforms.binding(),
         settings.0.binding(),
         pipeline_cache.get_compute_pipeline(ssgi_pipeline.trace_pipeline),
+        pipeline_cache.get_compute_pipeline(ssgi_pipeline.temporal_pipeline),
+        pipeline_cache.get_compute_pipeline(ssgi_pipeline.spatial_pipeline),
     )
     else {
         return;
     };
 
-    let bind_group = ctx.render_device().create_bind_group(
+    let render_device = ctx.render_device().clone();
+    let trace_bind_group = render_device.create_bind_group(
         Some("ssgi_trace_bind_group"),
         &pipeline_cache.get_bind_group_layout(&ssgi_pipeline.trace_layout),
         &BindGroupEntries::sequential((
@@ -546,25 +683,76 @@ fn ssgi_trace(
             normals,
             motion_vectors,
             &textures.history_read.default_view,
+            &textures.raw.default_view,
+            &textures.raw_depth.default_view,
+            view_binding.clone(),
+            settings_binding.clone(),
+        )),
+    );
+    let temporal_bind_group = render_device.create_bind_group(
+        Some("ssgi_temporal_bind_group"),
+        &pipeline_cache.get_bind_group_layout(&ssgi_pipeline.temporal_layout),
+        &BindGroupEntries::sequential((
+            depth,
+            motion_vectors,
+            &textures.raw.default_view,
+            &textures.raw_depth.default_view,
+            &textures.accumulated_read.default_view,
+            &textures.meta_read.default_view,
+            &textures.accumulated_write.default_view,
+            &textures.meta_write.default_view,
+            view_binding.clone(),
+            settings_binding.clone(),
+        )),
+    );
+    let spatial_bind_group = render_device.create_bind_group(
+        Some("ssgi_spatial_bind_group"),
+        &pipeline_cache.get_bind_group_layout(&ssgi_pipeline.spatial_layout),
+        &BindGroupEntries::sequential((
+            depth,
+            normals,
+            &textures.accumulated_write.default_view,
+            &textures.meta_write.default_view,
             &textures.gi.default_view,
             view_binding,
             settings_binding,
         )),
     );
 
+    let trace_size = if ssgi.half_resolution {
+        (viewport_size + UVec2::ONE) / 2
+    } else {
+        viewport_size
+    };
+    let passes = [
+        ("ssgi_trace", trace_pipeline, &trace_bind_group, trace_size),
+        (
+            "ssgi_temporal",
+            temporal_pipeline,
+            &temporal_bind_group,
+            viewport_size,
+        ),
+        (
+            "ssgi_spatial",
+            spatial_pipeline,
+            &spatial_bind_group,
+            viewport_size,
+        ),
+    ];
+
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
-    let time_span = diagnostics.time_span(ctx.command_encoder(), "ssgi_trace");
-    {
+    let time_span = diagnostics.time_span(ctx.command_encoder(), "ssgi");
+    for (label, pipeline, bind_group, size) in passes {
         let mut pass = ctx
             .command_encoder()
             .begin_compute_pass(&ComputePassDescriptor {
-                label: Some("ssgi_trace"),
+                label: Some(label),
                 timestamp_writes: None,
             });
-        pass.set_pipeline(trace_pipeline);
-        pass.set_bind_group(0, &bind_group, &[view_uniform_offset.offset]);
-        pass.dispatch_workgroups(viewport_size.x.div_ceil(8), viewport_size.y.div_ceil(8), 1);
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[view_uniform_offset.offset]);
+        pass.dispatch_workgroups(size.x.div_ceil(8), size.y.div_ceil(8), 1);
     }
     time_span.end(ctx.command_encoder());
 }
