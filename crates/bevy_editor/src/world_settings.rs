@@ -17,11 +17,16 @@ use bevy_extend::ssgi::{ScreenSpaceGlobalIllumination, ScreenSpaceGlobalIllumina
 use crate::{viewport::EditorCamera, LevelEntity};
 
 /// Rendering options for the whole level.
-#[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+#[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default, Clone, PartialEq)]
 pub struct WorldSettings {
-    /// Screen-space ambient occlusion: darkens corners and creases. Not needed when SSGI is on,
-    /// since SSGI darkens them too.
+    /// Brightness of the light that reaches every surface from all around (Bevy's ambient
+    /// light), in candela per square meter.
+    #[reflect(default = "default_ambient_brightness")]
+    pub ambient_brightness: f32,
+    /// Screen-space ambient occlusion: darkens ambient light in corners and creases, so it shows
+    /// more with a brighter `ambient_brightness`. Not needed when SSGI is on, since SSGI darkens
+    /// them too.
     pub ssao: bool,
     /// Screen-space global illumination: light bouncing off nearby surfaces, which tints them
     /// with each other's colors. Includes ambient occlusion.
@@ -30,6 +35,22 @@ pub struct WorldSettings {
     pub ssao_settings: ScreenSpaceAmbientOcclusion,
     /// SSGI strength, reach, denoising and debug views, used while `ssgi` is on.
     pub ssgi_settings: ScreenSpaceGlobalIllumination,
+}
+
+fn default_ambient_brightness() -> f32 {
+    GlobalAmbientLight::default().brightness
+}
+
+impl Default for WorldSettings {
+    fn default() -> Self {
+        Self {
+            ambient_brightness: default_ambient_brightness(),
+            ssao: false,
+            ssgi: false,
+            ssao_settings: default(),
+            ssgi_settings: default(),
+        }
+    }
 }
 
 /// The name of the entity that holds [`WorldSettings`].
@@ -56,12 +77,13 @@ pub fn select_world_settings(world: &mut World) {
     world.resource_mut::<InspectorSelection>().0 = Some(entity);
 }
 
-/// Turns SSAO and SSGI on the editor camera on and off to match the level's settings.
+/// Applies the level's settings: ambient light, and SSAO and SSGI on the editor camera.
 fn apply_world_settings(
     settings: Query<&WorldSettings>,
     cameras: Query<Entity, With<EditorCamera>>,
     new_cameras: Query<(), Added<EditorCamera>>,
     mut applied: Local<Option<WorldSettings>>,
+    mut ambient: ResMut<GlobalAmbientLight>,
     mut commands: Commands,
 ) {
     // A deleted World Settings entity is disabled, so it no longer matches and effects turn off.
@@ -70,6 +92,9 @@ fn apply_world_settings(
         return;
     }
 
+    if ambient.brightness != current.ambient_brightness {
+        ambient.brightness = current.ambient_brightness;
+    }
     for camera in &cameras {
         let mut camera = commands.entity(camera);
         if current.ssao {

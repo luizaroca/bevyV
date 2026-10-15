@@ -66,8 +66,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 @if(SCREEN_SPACE_AMBIENT_OCCLUSION) {
         let ssao_tex_pos = vec2<i32>(in.position.xy - view.viewport.xy);
         let ssao = textureLoad(screen_space_ambient_occlusion_texture, ssao_tex_pos, 0i).r;
-        let ssao_multibounce = ssao_multibounce(ssao, pbr_input.material.base_color.rgb);
-        pbr_input.diffuse_occlusion = min(pbr_input.diffuse_occlusion, ssao_multibounce);
+        let ssao_occlusion = ssao_multibounce(ssao, pbr_input.material.base_color.rgb);
+        pbr_input.diffuse_occlusion = min(pbr_input.diffuse_occlusion, ssao_occlusion);
 
         // Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
         let NdotV = max(dot(pbr_input.N, pbr_input.V), 0.0001); 

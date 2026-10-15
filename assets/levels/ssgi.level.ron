@@ -6,6 +6,7 @@
         "bevy_ecs::name::Name": "World Settings",
         "bevy_editor::LevelEntity": (),
         "bevy_editor::world_settings::WorldSettings": (
+          ambient_brightness: 300.0,
           ssao: false,
           ssgi: true,
           ssao_settings: (
