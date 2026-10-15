@@ -529,41 +529,119 @@ fn sample_shadow_cubemap(
     return 0.0;
 }
 
+// Bevy Extend: percentage-closer soft shadows (PCSS) for point lights. The spot
+// and directional light versions live in `shadows.wesl` and reuse the helpers
+// below.
+//
+// The upstream version scaled the penumbra by `POINT_SHADOW_SCALE` (a constant
+// meant for one-texel PCF), so penumbras ended up roughly a hundred times
+// smaller than the light size implies and the light radius barely mattered.
+// This version works in world units: the blocker search covers the light's
+// radius, the penumbra width follows the similar-triangles PCSS estimate, and
+// both passes use a per-pixel rotated Vogel disk with more samples. Each
+// sample is projected onto the receiver's surface plane and compared against
+// that point's own depth, which keeps wide filters from shadowing the
+// receiver itself (shadow acne) on surfaces lit at a grazing angle.
+
+/// Number of samples in the PCSS blocker search.
+const POINT_PCSS_BLOCKER_SAMPLES: u32 = 16u;
+/// Number of samples in the PCSS filter.
+const POINT_PCSS_FILTER_SAMPLES: u32 = 32u;
+/// The golden angle in radians, used to build Vogel disks.
+const GOLDEN_ANGLE: f32 = 2.39996323;
+
+/// Returns sample `index` of a Vogel disk with `count` samples and unit
+/// radius, rotated by `rotation` radians.
+fn vogel_disk_sample(index: u32, count: u32, rotation: f32) -> vec2<f32> {
+    let r = sqrt((f32(index) + 0.5) / f32(count));
+    let theta = f32(index) * GOLDEN_ANGLE + rotation;
+    return r * vec2(cos(theta), sin(theta));
+}
+
+/// Whether the temporal shadow filter is active, in which case the PCSS sample
+/// pattern rotates every frame so TAA can average the noise away.
+fn pcss_is_temporal() -> bool {
+    @if(SHADOW_FILTER_METHOD_TEMPORAL)
+    return true;
+    @else
+    return false;
+}
+
+/// Returns the per-pixel rotation of the PCSS sample pattern, which changes
+/// every frame when the temporal shadow filter is active.
+fn pcss_rotation(frag_coord_xy: vec2<f32>) -> f32 {
+    let frame = select(1u, view_bindings::globals.frame_count, pcss_is_temporal());
+    return 2.0 * PI * interleaved_gradient_noise(frag_coord_xy, frame);
+}
+
+/// Like [`project_onto_receiver_plane`], but for parallel light rays along
+/// `ray_direction` (directional lights). `position` and the result are world
+/// positions.
+fn project_onto_receiver_plane_parallel(
+    position: vec3<f32>,
+    offset: vec3<f32>,
+    normal: vec3<f32>,
+    ray_direction: vec3<f32>,
+) -> vec3<f32> {
+    let denominator = dot(normal, ray_direction);
+    if (abs(denominator) < 1e-3) {
+        return position + offset;
+    }
+    let t = clamp(-dot(normal, offset) / denominator, -4.0, 4.0);
+    return position + offset + t * ray_direction;
+}
+
+/// Converts a light-space position to the depth stored in a point light's
+/// cubemap shadow map.
+fn point_shadow_depth(frag_ls: vec3<f32>, light_custom_data: vec4<f32>) -> f32 {
+    let abs_ls = abs(frag_ls);
+    let major_axis_magnitude = max(abs_ls.x, max(abs_ls.y, abs_ls.z));
+    let zw = -major_axis_magnitude * light_custom_data.xy + light_custom_data.zw;
+    return zw.x / zw.y;
+}
+
+/// Moves `frag_ls` by `offset` (perpendicular to the light ray) and projects
+/// the result back onto the receiver plane through `frag_ls` with normal
+/// `normal`, along the ray from the light. Returns the original position when
+/// the projection is unstable (the plane is nearly parallel to the ray).
+fn project_onto_receiver_plane(
+    frag_ls: vec3<f32>,
+    offset: vec3<f32>,
+    normal: vec3<f32>,
+) -> vec3<f32> {
+    let moved = frag_ls + offset;
+    let denominator = dot(normal, moved);
+    let t = dot(normal, frag_ls) / denominator;
+    if (abs(denominator) < 1e-4 || t <= 0.0 || t > 4.0) {
+        return moved;
+    }
+    return moved * t;
+}
+
 /// Searches for PCSS blockers in a cubemap. This is the variant of the blocker
-/// search used for point and spot lights.
-///
-/// This follows the logic in `sample_shadow_cubemap_gaussian`, but uses linear
-/// sampling instead of percentage-closer filtering.
-///
-/// The `scale` parameter represents the size of the light.
+/// search used for point and spot lights. Returns the average depth of the
+/// blockers found, or 0 when nothing blocks.
 fn search_for_blockers_in_shadow_cubemap(
-    light_local: vec3<f32>,
-    depth: f32,
-    scale: f32,
-    distance_to_light: f32,
+    frag_ls: vec3<f32>,
+    normal: vec3<f32>,
+    light_custom_data: vec4<f32>,
+    search_radius: f32,
+    rotation: f32,
     light_id: u32,
 ) -> f32 {
-    // Create an orthonormal basis so we can apply a 2D sampling pattern to a
-    // cubemap.
-    let basis = orthonormalize(normalize(light_local)) * scale * distance_to_light;
+    let basis = orthonormalize(normalize(frag_ls));
 
-    var sum: vec2<f32> = vec2(0.0);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[0], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[1], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[2], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[3], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[4], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[5], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[6], basis[0], basis[1], light_local, depth, light_id);
-    sum += search_for_blockers_in_shadow_cubemap_at_offset(
-        D3D_SAMPLE_POINT_POSITIONS[7], basis[0], basis[1], light_local, depth, light_id);
+    var sum = vec2(0.0);
+    for (var i = 0u; i < POINT_PCSS_BLOCKER_SAMPLES; i += 1u) {
+        let disk = vogel_disk_sample(i, POINT_PCSS_BLOCKER_SAMPLES, rotation) * search_radius;
+        let sample_ls = project_onto_receiver_plane(
+            frag_ls, disk.x * basis[0] + disk.y * basis[1], normal);
+        sum += search_for_blockers_in_shadow_cubemap_hardware(
+            sample_ls * vec3(1.0, 1.0, -1.0),
+            point_shadow_depth(sample_ls, light_custom_data),
+            light_id,
+        );
+    }
 
     if (sum.y == 0.0) {
         return 0.0;
@@ -571,29 +649,48 @@ fn search_for_blockers_in_shadow_cubemap(
     return sum.x / sum.y;
 }
 
-/// Samples the shadow map for a point or spot light when percentage-closer soft
+/// Samples the shadow map for a point light when percentage-closer soft
 /// shadows are being used.
 ///
-/// A good overview of the technique:
-/// <https://medium.com/@varunm100/soft-shadows-for-mobile-ar-9e8da2e6f4ba>
+/// `frag_ls` is the (already biased) fragment position relative to the light,
+/// before the cubemap z flip; `normal` is the surface normal; `light_size` is
+/// the light's radius in world units.
 fn sample_shadow_cubemap_pcss(
-    light_local: vec3<f32>,
+    frag_ls: vec3<f32>,
+    normal: vec3<f32>,
+    light_custom_data: vec4<f32>,
     distance_to_light: f32,
     depth: f32,
     light_id: u32,
     light_size: f32,
     frag_coord_xy: vec2<f32>,
 ) -> f32 {
+    let rotation = pcss_rotation(frag_coord_xy);
+
     let z_blocker = search_for_blockers_in_shadow_cubemap(
-        light_local, depth, light_size, distance_to_light, light_id);
+        frag_ls, normal, light_custom_data, light_size, rotation, light_id);
+    if (z_blocker == 0.0) {
+        return 1.0;
+    }
 
-    // Don't let the blur size go below 0.5, or shadows will look unacceptably aliased.
-    let blur_size = max((z_blocker - depth) * light_size / depth, 0.5);
+    // With a reverse-Z perspective projection the stored depth is
+    // proportional to 1 / distance, so `z_blocker / depth - 1` is
+    // `(receiver - blocker) / blocker`: the classic PCSS penumbra ratio.
+    // Keep at least about a texel of blur so contact shadows don't alias.
+    let min_radius = POINT_SHADOW_SCALE * distance_to_light;
+    let penumbra_radius = max(light_size * (z_blocker / depth - 1.0), min_radius);
 
-    @if(SHADOW_FILTER_METHOD_TEMPORAL)
-    return sample_shadow_cubemap_jittered(
-        light_local, depth, frag_coord_xy, POINT_SHADOW_SCALE * blur_size, distance_to_light, light_id, true);
-    @else
-    return sample_shadow_cubemap_jittered(
-        light_local, depth, frag_coord_xy, POINT_SHADOW_SCALE * blur_size, distance_to_light, light_id, false);
+    let basis = orthonormalize(normalize(frag_ls));
+    var sum = 0.0;
+    for (var i = 0u; i < POINT_PCSS_FILTER_SAMPLES; i += 1u) {
+        let disk = vogel_disk_sample(i, POINT_PCSS_FILTER_SAMPLES, rotation) * penumbra_radius;
+        let sample_ls = project_onto_receiver_plane(
+            frag_ls, disk.x * basis[0] + disk.y * basis[1], normal);
+        sum += sample_shadow_cubemap_hardware(
+            sample_ls * vec3(1.0, 1.0, -1.0),
+            point_shadow_depth(sample_ls, light_custom_data),
+            light_id,
+        );
+    }
+    return sum / f32(POINT_PCSS_FILTER_SAMPLES);
 }
