@@ -857,6 +857,16 @@ fn apply_pbr_lighting(
     }
 }
 
+    // SSAO on direct light (Bevy Extend fork): see `ScreenSpaceAmbientOcclusion::direct_light`.
+@if(SSAO_DIRECT_LIGHT) {
+    let ssao_direct_visibility = textureLoad(
+        view_bindings::screen_space_ambient_occlusion_texture,
+        vec2<i32>(in.frag_coord.xy - view_bindings::view.viewport.xy),
+        0i
+    ).r;
+    direct_light *= ssao_direct_visibility;
+}
+
     // Total light
     output_color = vec4<f32>(
         (view_bindings::view.exposure * (transmitted_light + direct_light + indirect_light)) + emissive_light,

@@ -55,7 +55,7 @@ pub fn prepare_material_meshlet_meshes_main_opaque_pass(
             Option<&DebandDither>,
             Option<&ShadowFilteringMethod>,
             (
-                Has<ScreenSpaceAmbientOcclusion>,
+                Option<&ScreenSpaceAmbientOcclusion>,
                 Has<DistanceFog>,
                 Has<ScreenSpaceIndirectLight>,
             ),
@@ -148,8 +148,11 @@ pub fn prepare_material_meshlet_meshes_main_opaque_pass(
             }
         }
 
-        if ssao {
+        if let Some(ssao) = ssao {
             view_key |= MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION;
+            if ssao.direct_light {
+                view_key |= MeshPipelineKey::SSAO_DIRECT_LIGHT;
+            }
         }
         if screen_space_indirect_light {
             view_key |= MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT;

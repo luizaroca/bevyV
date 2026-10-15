@@ -24,9 +24,8 @@ pub struct WorldSettings {
     /// light), in candela per square meter.
     #[reflect(default = "default_ambient_brightness")]
     pub ambient_brightness: f32,
-    /// Screen-space ambient occlusion: darkens ambient light in corners and creases, so it shows
-    /// more with a brighter `ambient_brightness`. Not needed when SSGI is on, since SSGI darkens
-    /// them too.
+    /// Screen-space ambient occlusion: darkens corners and creases. It darkens ambient light, and
+    /// lamp light too while `ssao_settings.direct_light` is on (the default).
     pub ssao: bool,
     /// Screen-space global illumination: light bouncing off nearby surfaces, which tints them
     /// with each other's colors. Includes ambient occlusion.
@@ -47,9 +46,11 @@ impl Default for WorldSettings {
             ambient_brightness: default_ambient_brightness(),
             ssao: false,
             ssgi: false,
-            // Twice Bevy's default strength, so SSAO is noticeable next to direct light.
+            // Twice Bevy's default strength, and on lamp light too, so SSAO is noticeable in
+            // scenes lit mostly by lights.
             ssao_settings: ScreenSpaceAmbientOcclusion {
                 intensity: 2.0,
+                direct_light: true,
                 ..default()
             },
             ssgi_settings: default(),

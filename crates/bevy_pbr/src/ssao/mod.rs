@@ -135,6 +135,12 @@ pub struct ScreenSpaceAmbientOcclusion {
     /// Defaults to `1.0`. (Bevy Extend fork addition.)
     #[reflect(default = "default_ssao_intensity")]
     pub intensity: f32,
+    /// Also darken direct light (point, spot and directional lights), not only ambient light.
+    /// Not physically based, since lights are already shadowed, but it makes contact shadows
+    /// in corners and creases visible in scenes lit mostly by lamps.
+    /// Defaults to `false`. (Bevy Extend fork addition.)
+    #[reflect(default)]
+    pub direct_light: bool,
 }
 
 fn default_ssao_intensity() -> f32 {
@@ -150,6 +156,7 @@ impl Default for ScreenSpaceAmbientOcclusion {
             radius: DEFAULT_SSAO_RADIUS,
             constant_object_thickness: 0.25,
             intensity: default_ssao_intensity(),
+            direct_light: false,
         }
     }
 }
