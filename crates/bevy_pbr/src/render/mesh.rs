@@ -1,6 +1,6 @@
 use crate::contact_shadows::ContactShadows;
-use crate::ScreenSpaceIndirectLight;
 use crate::{resources::prepare_atmosphere_buffers, skin::skin_uniforms_from_world};
+use crate::{ScreenSpaceIndirectLight, ScreenSpaceSpecular};
 use alloc::sync::Arc;
 use bevy_asset::uuid::Uuid;
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetId, AssetIndex, AssetServer};
@@ -388,7 +388,7 @@ pub fn check_views_need_specialization(
             Has<ScreenSpaceReflectionsUniform>,
             Has<ContactShadows>,
         ),
-        Has<ScreenSpaceIndirectLight>,
+        (Has<ScreenSpaceIndirectLight>, Has<ScreenSpaceSpecular>),
     )>,
     mut seen_views: Local<HashSet<RetainedViewEntity>>,
 ) {
@@ -408,7 +408,7 @@ pub fn check_views_need_specialization(
         distance_fog,
         (has_environment_maps, has_irradiance_volumes),
         (has_oit, has_atmosphere, has_ssr, has_contact_shadows),
-        has_screen_space_indirect_light,
+        (has_screen_space_indirect_light, has_screen_space_specular),
     ) in views.iter_mut()
     {
         seen_views.insert(view.retained_view_entity);
@@ -501,6 +501,9 @@ pub fn check_views_need_specialization(
         }
         if has_screen_space_indirect_light {
             view_key |= MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT;
+        }
+        if has_screen_space_specular {
+            view_key |= MeshPipelineKey::SCREEN_SPACE_SPECULAR;
         }
         if distance_fog {
             view_key |= MeshPipelineKey::DISTANCE_FOG;
@@ -3137,7 +3140,8 @@ bitflags::bitflags! {
         const CONTACT_SHADOWS                   = 1 << 24;
         const SCREEN_SPACE_INDIRECT_LIGHT       = 1 << 25; // Bevy Extend fork: see `ScreenSpaceIndirectLight`
         const SSAO_DIRECT_LIGHT                 = 1 << 26; // Bevy Extend fork: see `ScreenSpaceAmbientOcclusion::direct_light`
-        const LAST_FLAG                         = Self::SSAO_DIRECT_LIGHT.bits();
+        const SCREEN_SPACE_SPECULAR             = 1 << 27; // Bevy Extend fork: see `ScreenSpaceSpecular`
+        const LAST_FLAG                         = Self::SCREEN_SPACE_SPECULAR.bits();
 
         const ALL_PREPASS_BITS                  = Self::DEPTH_PREPASS.bits()
                                                 | Self::NORMAL_PREPASS.bits()
@@ -3602,6 +3606,9 @@ impl SpecializedMeshPipeline for MeshPipeline {
         // Same for screen-space indirect light (Bevy Extend fork).
         if key.contains(MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT) && depth_write_enabled {
             shader_defs.push("SCREEN_SPACE_INDIRECT_LIGHT".into());
+        }
+        if key.contains(MeshPipelineKey::SCREEN_SPACE_SPECULAR) && depth_write_enabled {
+            shader_defs.push("SCREEN_SPACE_SPECULAR".into());
         }
 
         if key.contains(MeshPipelineKey::MOTION_VECTOR_PREPASS) {

@@ -706,6 +706,27 @@ fn apply_pbr_lighting(
     indirect_light += screen_space_indirect / view_bindings::view.exposure * diffuse_color;
 }
 
+    // Screen-space reflections (Bevy Extend fork). rgb is the light arriving along the reflected
+    // ray, a how much of the environment map's and ambient light's specular light it replaces.
+    @if(SCREEN_SPACE_SPECULAR)
+    let screen_space_specular = textureLoad(
+        view_bindings::screen_space_specular_texture,
+        vec2<i32>(in.frag_coord.xy),
+        0i
+    );
+    @else   // SCREEN_SPACE_SPECULAR
+    let screen_space_specular = vec4(0.0);
+    let screen_space_specular_weight = saturate(screen_space_specular.a);
+@if(SCREEN_SPACE_SPECULAR) {
+    // The same pre-integrated specular response as the environment map's (single scattering);
+    // the trace already accounts for what blocks the reflection, so no specular occlusion.
+    let ssr_specular_floor = saturate(dot(F0, vec3(50.0 * 0.33)));
+    let ssr_FssEss = (F0 * F_ab.x + F_ab.y) * ssr_specular_floor;
+    // The texture already has exposure applied; it is applied again below.
+    indirect_light += screen_space_specular.rgb / view_bindings::view.exposure * ssr_FssEss
+        * screen_space_specular_weight;
+}
+
 @if(LIGHTMAP) {
     indirect_light += in.lightmap_light * diffuse_color;
     found_diffuse_indirect = true;
@@ -752,7 +773,8 @@ fn apply_pbr_lighting(
 
     indirect_light += environment_light.diffuse * diffuse_occlusion;
     if (!use_ssr) {
-        indirect_light += environment_light.specular * specular_occlusion;
+        indirect_light += environment_light.specular * specular_occlusion
+            * (1.0 - screen_space_specular_weight);
     }
 }
 
@@ -765,6 +787,10 @@ fn apply_pbr_lighting(
     let enable_ambient = true;
     if (enable_ambient) {
         indirect_light += ambient::ambient_light(in.world_position, in.N, in.V, NdotV, diffuse_color, F0, perceptual_roughness, diffuse_occlusion);
+        // Screen-space reflections replace the ambient light's specular part where they hit
+        // (Bevy Extend fork).
+        @if(SCREEN_SPACE_SPECULAR)
+        indirect_light -= screen_space_specular_weight * ambient::ambient_light(in.world_position, in.N, in.V, NdotV, vec3(0.0), F0, perceptual_roughness, diffuse_occlusion);
     }
 
     // we'll use the specular component of the transmitted environment

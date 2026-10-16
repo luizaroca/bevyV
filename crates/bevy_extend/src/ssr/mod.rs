@@ -9,10 +9,13 @@
 //! 1. After the prepass, `trace.wesl` traces one reflection ray per pixel through the depth
 //!    buffer and takes the light it hits from last frame's lit image (the history). Roughness
 //!    comes from the normal prepass, which this fork extends to carry it.
-//! 2. After the main pass, the lit image is copied into the history for the next frame, and a
-//!    debug view can replace the image.
+//! 2. The main pass (forward or deferred) uses the reflections as each opaque surface's specular
+//!    indirect light, through the `ScreenSpaceSpecular` hook this fork adds to `bevy_pbr`. Where
+//!    rays miss, it blends back to the environment map and ambient light.
+//! 3. After the main pass, the lit image is copied into the history for the next frame, so
+//!    reflections show up in other reflections, and a debug view can replace the image.
 //!
-//! The reflections are not applied to lighting yet (phase 3), nor denoised (phase 4).
+//! The reflections are not denoised yet (phase 4).
 
 use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle};
@@ -31,6 +34,7 @@ use bevy_ecs::{
     system::{lifetimeless::Read, Commands, Query, Res, ResMut},
 };
 use bevy_image::ToExtents;
+use bevy_pbr::{ScreenSpaceSpecular, ScreenSpaceSpecularTexture};
 use bevy_reflect::{std_traits::ReflectDefault, Reflect};
 use bevy_render::{
     camera::ExtractedCamera,
@@ -79,8 +83,8 @@ pub struct ExtendScreenSpaceReflectionsPlugin;
 /// Only `StandardMaterial` surfaces reflect, because they store their roughness in the normal
 /// prepass; other materials count as fully rough.
 ///
-/// Work in progress: the reflections can be looked at with [`Self::debug_view`] but don't light
-/// the scene yet.
+/// Work in progress: the reflections are one noisy ray per pixel and not denoised yet, so rough
+/// surfaces look grainy without TAA.
 #[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default, Clone, PartialEq)]
 #[require(DepthPrepass, NormalPrepass, MotionVectorPrepass, TonemappingPass)]
@@ -200,13 +204,21 @@ impl Plugin for ExtendScreenSpaceReflectionsPlugin {
 }
 
 impl SyncComponent<RenderApp> for ExtendScreenSpaceReflections {
-    type Target = (Self, SsrTextures, SsrPipelineIds, SsrSettingsBuffer);
+    type Target = (
+        Self,
+        ScreenSpaceSpecular,
+        ScreenSpaceSpecularTexture,
+        SsrTextures,
+        SsrPipelineIds,
+        SsrSettingsBuffer,
+    );
 }
 
 impl ExtractComponent<RenderApp> for ExtendScreenSpaceReflections {
     type QueryData = (Read<Self>, Read<Msaa>);
     type QueryFilter = With<Camera3d>;
-    type Out = Self;
+    /// The marker tells `bevy_pbr` to build lighting pipelines that read SSR's output.
+    type Out = (Self, ScreenSpaceSpecular);
 
     fn extract_component((ssr, msaa): QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
         if *msaa != Msaa::Off {
@@ -216,7 +228,7 @@ impl ExtractComponent<RenderApp> for ExtendScreenSpaceReflections {
             ));
             return None;
         }
-        Some(ssr.clone())
+        Some((ssr.clone(), ScreenSpaceSpecular))
     }
 }
 
@@ -270,11 +282,14 @@ fn prepare_ssr_textures(
         } else {
             (history_2, history_1)
         };
-        commands.entity(entity).insert(SsrTextures {
-            history_write,
-            history_read,
-            reflections,
-        });
+        commands.entity(entity).insert((
+            ScreenSpaceSpecularTexture(reflections.default_view.clone()),
+            SsrTextures {
+                history_write,
+                history_read,
+                reflections,
+            },
+        ));
     }
 }
 

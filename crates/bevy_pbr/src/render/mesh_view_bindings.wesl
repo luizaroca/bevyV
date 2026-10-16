@@ -115,6 +115,9 @@ const VISIBILITY_RANGE_UNIFORM_BUFFER_SIZE: u32 = 64u;
 // Bevy Extend fork: screen-space indirect light (see `ScreenSpaceIndirectLightTexture`).
 @if(SCREEN_SPACE_INDIRECT_LIGHT)
 @group(0) @binding(39) var screen_space_indirect_light_texture: texture_2d<f32>;
+// Bevy Extend fork: screen-space specular light, i.e. reflections (see `ScreenSpaceSpecularTexture`).
+@if(SCREEN_SPACE_SPECULAR)
+@group(0) @binding(40) var screen_space_specular_texture: texture_2d<f32>;
 
 @if(ENVIRONMENT_MAP && MULTIPLE_LIGHT_PROBES_IN_ARRAY) {
 @group(1) @binding(0) var diffuse_environment_maps: binding_array<texture_cube<f32>, 8u>;

@@ -19,7 +19,9 @@ in Bevy updates rarely conflicts:
 Upstream files changed for screen-space reflections (`crates/bevy_extend/src/ssr`): the normal
 prepass is `Rgba16Float` instead of `Rgb10a2Unorm` (`bevy_core_pipeline/src/prepass/mod.rs`), and
 `StandardMaterial` writes its perceptual roughness into its alpha (`bevy_pbr/src/render/pbr_prepass.wesl`
-and `bevy_pbr/src/deferred/functions.wesl`).
+and `bevy_pbr/src/deferred/functions.wesl`). Reflections reach lighting through a `ScreenSpaceSpecular` hook in
+`bevy_pbr` (`screen_space_indirect_light.rs`, view binding 40, used in `pbr_functions.wesl`), next to
+SSGI's `ScreenSpaceIndirectLight` hook.
 
 When a feature does need to change an upstream file, keep the change small and mention it in the PR.
 
