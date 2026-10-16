@@ -30,7 +30,8 @@
 //! quits, `SSR=0` starts with SSR off, `SSR_BUILTIN=1` starts with Bevy's built-in SSR,
 //! `SSR_DEBUG=off|reflections|confidence|roughness` picks the starting debug view, `SSR_TAA=0`
 //! starts with TAA off, `SSR_SPIN=0` starts with the cube still and `SSR_DEFERRED=1` renders
-//! with Bevy's deferred renderer instead of forward.
+//! with Bevy's deferred renderer instead of forward. `SSR_CAMERA=x,y,z,tx,ty,tz` places the camera
+//! at x,y,z looking at tx,ty,tz.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
@@ -99,6 +100,20 @@ struct HelpText;
 
 #[derive(Component)]
 struct Spinning;
+
+/// The camera's starting place: `SSR_CAMERA` if set, otherwise the default view.
+fn camera_transform() -> Transform {
+    let numbers: Vec<f32> = std::env::var("SSR_CAMERA")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|number| number.trim().parse().ok())
+        .collect();
+    let (position, target) = match numbers[..] {
+        [x, y, z, tx, ty, tz] => (Vec3::new(x, y, z), Vec3::new(tx, ty, tz)),
+        _ => (CAMERA_POSITION, CAMERA_TARGET),
+    };
+    Transform::from_translation(position).looking_at(target, Vec3::Y)
+}
 
 fn deferred() -> bool {
     std::env::var("SSR_DEFERRED").is_ok_and(|value| value == "1")
@@ -280,7 +295,7 @@ fn setup(
             Name::new("Camera"),
             Camera3d::default(),
             Hdr,
-            Transform::from_translation(CAMERA_POSITION).looking_at(CAMERA_TARGET, Vec3::Y),
+            camera_transform(),
             FreeCamera::default(),
             // Both SSRs read prepasses, which (like deferred rendering) don't support MSAA.
             Msaa::Off,
