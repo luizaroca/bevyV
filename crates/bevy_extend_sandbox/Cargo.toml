@@ -8,7 +8,7 @@ publish = false
 default-run = "bevy_extend_sandbox"
 
 [dependencies]
-bevy = { path = "../..", version = "0.20.0-dev", features = ["free_camera", "experimental_pbr_pcss"] }
+bevy = { path = "../..", version = "0.20.0-dev", features = ["free_camera", "experimental_pbr_pcss", "bluenoise_texture", "zstd_rust"] }
 bevy_extend = { path = "../bevy_extend", version = "0.20.0-dev" }
 
 [lints]
