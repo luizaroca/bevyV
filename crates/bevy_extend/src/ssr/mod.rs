@@ -1,8 +1,8 @@
 //! Screen-space reflections (SSR) that work with forward and deferred rendering.
 //!
 //! Work in progress, built in phases (see `notes/ssr-plan.md` in the project files). Bevy's own
-//! `bevy_pbr::ScreenSpaceReflections` needs the deferred renderer, misses the sky, and is noisy
-//! without TAA. This one traces against last frame's finished image, like
+//! `bevy_pbr::ScreenSpaceReflections` needs the deferred renderer, misses the sky and transparent
+//! objects, and is noisy without TAA. This one traces against last frame's finished image, like
 //! SSGI, so it doesn't depend on how the frame is lit.
 //!
 //! Each frame:
@@ -13,11 +13,13 @@
 //!    indirect light, through the `ScreenSpaceSpecular` hook this fork adds to `bevy_pbr`. Where
 //!    rays miss, it blends back to the environment map and ambient light.
 //! 3. After the opaque pass and the sky, the lit image is copied into the history for the next
-//!    frame, so reflections show up in other reflections. Transparent objects are left out: they
-//!    aren't in the depth buffer, so rays can't tell where they are. A debug view can replace the
-//!    finished image.
+//!    frame, so reflections show up in other reflections. After transparents, a second copy is
+//!    made for rays that hit glass, which gets its own depth layer (`glass.rs`) right after the
+//!    prepass. A debug view can replace the finished image.
 //!
 //! The reflections are not denoised yet (phase 4).
+
+mod glass;
 
 use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle};
@@ -60,11 +62,16 @@ use bevy_render::{
     sync_component::SyncComponent,
     texture::{CachedTexture, TextureCache},
     view::{ExtractedView, Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
-    GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
+    ExtractSchedule, GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_shader::Shader;
 use bevy_utils::{default, once};
 use tracing::error;
+
+use glass::{
+    extract_glass, prepare_glass, ssr_glass_depth, ExtractedGlass, GlassPipeline,
+    GLASS_DEPTH_FORMAT,
+};
 
 /// Format of the radiance history. Lit HDR color needs more range than 8 bits.
 const HISTORY_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -171,6 +178,7 @@ impl Plugin for ExtendScreenSpaceReflectionsPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "ssr.wesl");
         embedded_asset!(app, "trace.wesl");
+        embedded_asset!(app, "glass.wesl");
 
         app.add_plugins(ExtractComponentPlugin::<ExtendScreenSpaceReflections>::default());
 
@@ -180,33 +188,39 @@ impl Plugin for ExtendScreenSpaceReflectionsPlugin {
 
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<SsrPipeline>>()
+            .init_resource::<ExtractedGlass>()
             .add_systems(RenderStartup, init_ssr_pipeline)
+            .add_systems(ExtractSchedule, extract_glass)
             .add_systems(
                 Render,
                 (
                     prepare_ssr_pipelines.in_set(RenderSystems::Prepare),
-                    (prepare_ssr_textures, prepare_ssr_settings)
+                    (prepare_ssr_textures, prepare_ssr_settings, prepare_glass)
                         .in_set(RenderSystems::PrepareResources),
                 ),
             )
             .add_systems(
                 Core3d,
                 (
+                    // Where glass is, for the trace.
+                    ssr_glass_depth
+                        .after(Core3dSystems::Prepass)
+                        .before(ssr_trace),
                     // Needs this frame's depth, normals and motion vectors, and must finish
-                    // before the main pass so lighting can use it (from phase 3).
+                    // before the main pass so lighting can use it.
                     ssr_trace
                         .after(Core3dSystems::Prepass)
                         .before(Core3dSystems::MainPass),
                     // After opaque lighting and the sky, before transmissive and transparent
-                    // objects. Those aren't in the depth buffer, so a ray can't find where they
-                    // are; if they were in the history, they would show up in reflections at the
-                    // position of whatever is behind them.
+                    // objects. Rays that hit opaque surfaces take their light from here, so glass
+                    // in front of those surfaces doesn't show up at the surface's position.
                     ssr_store_history
                         .after(main_opaque_pass_3d)
                         .before(main_transmissive_pass_3d)
                         .in_set(Core3dSystems::MainPass),
-                    // Replaces the finished image, before TAA and other post-processing.
-                    ssr_debug_view
+                    // The finished image, glass included, for rays that hit the glass layer.
+                    // Then the debug view replaces it, before TAA and other post-processing.
+                    ssr_store_glass_history_and_debug
                         .after(Core3dSystems::MainPass)
                         .before(Core3dSystems::EarlyPostProcess),
                 ),
@@ -249,6 +263,11 @@ impl ExtractComponent<RenderApp> for ExtendScreenSpaceReflections {
 pub struct SsrTextures {
     history_write: CachedTexture,
     history_read: CachedTexture,
+    /// The same for the image with transparent objects drawn, for rays that hit glass.
+    glass_history_write: CachedTexture,
+    glass_history_read: CachedTexture,
+    /// Depth of the nearest see-through surface in front of the opaque scene (see `glass.rs`).
+    glass_depth: CachedTexture,
     /// Trace output, viewport-relative.
     reflections: CachedTexture,
 }
@@ -278,6 +297,18 @@ fn prepare_ssr_textures(
         let history_1 = texture_cache.get(&render_device, descriptor.clone());
         descriptor.label = Some("ssr_history_2_texture");
         let history_2 = texture_cache.get(&render_device, descriptor.clone());
+        descriptor.label = Some("ssr_glass_history_1_texture");
+        let glass_history_1 = texture_cache.get(&render_device, descriptor.clone());
+        descriptor.label = Some("ssr_glass_history_2_texture");
+        let glass_history_2 = texture_cache.get(&render_device, descriptor.clone());
+        let glass_depth = texture_cache.get(
+            &render_device,
+            TextureDescriptor {
+                label: Some("ssr_glass_depth_texture"),
+                format: GLASS_DEPTH_FORMAT,
+                ..descriptor.clone()
+            },
+        );
         let reflections = texture_cache.get(
             &render_device,
             TextureDescriptor {
@@ -288,16 +319,20 @@ fn prepare_ssr_textures(
             },
         );
 
-        let (history_write, history_read) = if frame_count.0.is_multiple_of(2) {
-            (history_1, history_2)
-        } else {
-            (history_2, history_1)
-        };
+        let (history_write, history_read, glass_history_write, glass_history_read) =
+            if frame_count.0.is_multiple_of(2) {
+                (history_1, history_2, glass_history_1, glass_history_2)
+            } else {
+                (history_2, history_1, glass_history_2, glass_history_1)
+            };
         commands.entity(entity).insert((
             ScreenSpaceSpecularTexture(reflections.default_view.clone()),
             SsrTextures {
                 history_write,
                 history_read,
+                glass_history_write,
+                glass_history_read,
+                glass_depth,
                 reflections,
             },
         ));
@@ -403,6 +438,9 @@ fn init_ssr_pipeline(
                 texture_storage_2d(REFLECTIONS_FORMAT, StorageTextureAccess::WriteOnly),
                 uniform_buffer::<ViewUniform>(true),
                 uniform_buffer::<SsrSettingsUniform>(false),
+                // Glass layer depth, and the history with glass in it
+                texture_depth_2d(),
+                texture_2d(TextureSampleType::Float { filterable: true }),
             ),
         ),
     );
@@ -419,6 +457,10 @@ fn init_ssr_pipeline(
         min_filter: FilterMode::Linear,
         ..default()
     });
+    commands.insert_resource(GlassPipeline::new(load_embedded_asset!(
+        asset_server.as_ref(),
+        "glass.wesl"
+    )));
     commands.insert_resource(SsrPipeline {
         layout,
         trace_layout,
@@ -558,6 +600,8 @@ fn ssr_trace(
             &textures.reflections.default_view,
             view_binding,
             settings_binding,
+            &textures.glass_depth.default_view,
+            &textures.glass_history_read.default_view,
         )),
     );
 
@@ -610,24 +654,40 @@ fn ssr_store_history(
     let Some(normals) = prepass_textures.normal_view() else {
         return;
     };
-    let Some(copy_pipeline) = pipeline_cache.get_render_pipeline(pipeline_ids.copy_history) else {
-        return;
-    };
-    let bind_group = ssr_bind_group(
-        &ctx,
+    copy_into(
+        &mut ctx,
         &ssr_pipeline,
         &pipeline_cache,
+        pipeline_ids,
         view_target.main_texture_view(),
         textures,
         normals,
+        &textures.history_write.default_view,
     );
+}
+
+/// Copies `image` into `destination`, a history texture.
+fn copy_into(
+    ctx: &mut RenderContext,
+    ssr_pipeline: &SsrPipeline,
+    pipeline_cache: &PipelineCache,
+    pipeline_ids: &SsrPipelineIds,
+    image: &TextureView,
+    textures: &SsrTextures,
+    normals: &TextureView,
+    destination: &TextureView,
+) {
+    let Some(copy_pipeline) = pipeline_cache.get_render_pipeline(pipeline_ids.copy_history) else {
+        return;
+    };
+    let bind_group = ssr_bind_group(ctx, ssr_pipeline, pipeline_cache, image, textures, normals);
 
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
     let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("ssr_copy_history"),
         color_attachments: &[Some(RenderPassColorAttachment {
-            view: &textures.history_write.default_view,
+            view: destination,
             depth_slice: None,
             resolve_target: None,
             ops: Operations::default(),
@@ -644,8 +704,9 @@ fn ssr_store_history(
     span.end(&mut pass);
 }
 
-/// Shows one of SSR's buffers instead of the image, when a debug view is picked.
-fn ssr_debug_view(
+/// Copies the finished image, glass included, into the glass history; then, when a debug view
+/// is picked, shows one of SSR's buffers instead of the image.
+fn ssr_store_glass_history_and_debug(
     view: ViewQuery<(
         &ViewTarget,
         &ViewPrepassTextures,
@@ -660,6 +721,17 @@ fn ssr_debug_view(
     let Some(normals) = prepass_textures.normal_view() else {
         return;
     };
+    copy_into(
+        &mut ctx,
+        &ssr_pipeline,
+        &pipeline_cache,
+        pipeline_ids,
+        view_target.main_texture_view(),
+        textures,
+        normals,
+        &textures.glass_history_write.default_view,
+    );
+
     let Some(debug_pipeline) = pipeline_ids
         .debug_view
         .and_then(|id| pipeline_cache.get_render_pipeline(id))

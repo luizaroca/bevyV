@@ -6,6 +6,12 @@
 //! (the reprojected history). A ray that leaves without hitting anything but points at the sky
 //! takes the sky from the history, which is exact for something infinitely far away.
 //!
+//! Glass and other see-through surfaces aren't in the depth buffer. They get a depth layer of
+//! their own (see `glass.rs`): a ray that hits it takes its light from a history copy that has
+//! glass in it, while rays that hit opaque surfaces use one without, so glass in front of a
+//! surface doesn't show up at the surface's position. A ray that passes through glass sees what's
+//! behind it untinted.
+//!
 //! Roughness comes from the normal prepass's alpha, which this fork's `StandardMaterial` prepass
 //! fills in (other materials write 1.0, which is too rough to reflect).
 //!
@@ -38,6 +44,8 @@ struct SsrSettings {
 @group(0) @binding(5) var output: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(6) var<uniform> view: View;
 @group(0) @binding(7) var<uniform> settings: SsrSettings;
+@group(0) @binding(8) var glass_depth_texture: texture_depth_2d;
+@group(0) @binding(9) var glass_history: texture_2d<f32>;
 
 /// Bevy's lighting never goes below this perceptual roughness either.
 const MIN_PERCEPTUAL_ROUGHNESS: f32 = 0.089;
@@ -65,14 +73,23 @@ fn project(position: vec4<f32>) -> vec3<f32> {
     return vec3(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, clip.w);
 }
 
-/// Distance in front of the camera of the surface at a pixel, or 0 for sky.
-fn linear_depth(pixel: vec2<i32>) -> f32 {
-    let depth = textureLoad(depth_texture, pixel, 0);
+/// Distance in front of the camera of a depth buffer value, or 0 for nothing there.
+fn depth_to_linear(depth: f32) -> f32 {
     if (depth == 0.0) {
         return 0.0;
     }
     let t = view.view_from_clip * vec4(0.0, 0.0, depth, 1.0);
     return -t.z / t.w;
+}
+
+/// Distance in front of the camera of the opaque surface at a pixel, or 0 for sky.
+fn linear_depth(pixel: vec2<i32>) -> f32 {
+    return depth_to_linear(textureLoad(depth_texture, pixel, 0));
+}
+
+/// Distance in front of the camera of the glass at a pixel, or 0 where there is none.
+fn glass_linear_depth(pixel: vec2<i32>) -> f32 {
+    return depth_to_linear(textureLoad(glass_depth_texture, pixel, 0));
 }
 
 fn view_from_world_3x3() -> mat3x3<f32> {
@@ -145,15 +162,21 @@ fn edge_fade(uv: vec2<f32>) -> f32 {
     return fade.x * fade.y;
 }
 
-/// Last frame's light at a point on screen this frame, following its motion vector. The alpha
-/// is 0 if it was off screen last frame.
-fn previous_radiance(uv: vec2<f32>) -> vec4<f32> {
+/// Last frame's light at a point on screen this frame, following its motion vector, from the
+/// history with glass in it or the one without. The alpha is 0 if it was off screen last frame.
+fn previous_radiance(uv: vec2<f32>, with_glass: bool) -> vec4<f32> {
     let pixel = uv_to_pixel(uv);
     let previous_uv = uv - textureLoad(motion_vectors, pixel, 0).rg;
     if (any(previous_uv != saturate(previous_uv))) {
         return vec4(0.0);
     }
-    return vec4(textureSampleLevel(history, linear_sampler, previous_uv, 0.0).rgb, 1.0);
+    var radiance: vec3<f32>;
+    if (with_glass) {
+        radiance = textureSampleLevel(glass_history, linear_sampler, previous_uv, 0.0).rgb;
+    } else {
+        radiance = textureSampleLevel(history, linear_sampler, previous_uv, 0.0).rgb;
+    }
+    return vec4(radiance, 1.0);
 }
 
 @compute
@@ -214,6 +237,8 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var previous_t = min_t;
     var hit_t = -1.0;
+    // Whether the hit is on the glass layer rather than an opaque surface.
+    var hit_glass = false;
     // When the ray passes behind something (further than its assumed thickness), the depth of
     // that occluder; negative while the ray is in the open.
     var occluder_depth = -1.0;
@@ -227,7 +252,15 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             break;
         }
         let ray_depth = 1.0 / mix(start_inverse_w, end_inverse_w, t);
-        let scene_depth = linear_depth(uv_to_pixel(sample_uv));
+        let sample_pixel = uv_to_pixel(sample_uv);
+        // Glass is in front of the opaque surface at the same pixel, so it's checked first.
+        let glass_depth = glass_linear_depth(sample_pixel);
+        if (glass_depth > 0.0 && ray_depth > glass_depth && ray_depth - glass_depth < settings.thickness) {
+            hit_t = t;
+            hit_glass = true;
+            break;
+        }
+        let scene_depth = linear_depth(sample_pixel);
         if (scene_depth > 0.0 && ray_depth > scene_depth) {
             // Behind the depth buffer's surface, but by less than its assumed thickness.
             if (ray_depth - scene_depth < settings.thickness) {
@@ -256,7 +289,7 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let hit_uv = mix(start.xy, end.xy, hidden_hit_t);
         let hit_normal = view_from_world_3x3() * (textureLoad(normal_texture, uv_to_pixel(hit_uv), 0).xyz * 2.0 - 1.0);
         if (dot(hit_normal, direction) < 0.0) {
-            let radiance = previous_radiance(hit_uv);
+            let radiance = previous_radiance(hit_uv, false);
             result = vec4(radiance.rgb, radiance.a * edge_fade(hit_uv));
         }
     } else if (hit_t >= 0.0) {
@@ -267,7 +300,12 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let middle = 0.5 * (low + high);
             let sample_uv = mix(start.xy, end.xy, middle);
             let ray_depth = 1.0 / mix(start_inverse_w, end_inverse_w, middle);
-            let scene_depth = linear_depth(uv_to_pixel(sample_uv));
+            var scene_depth: f32;
+            if (hit_glass) {
+                scene_depth = glass_linear_depth(uv_to_pixel(sample_uv));
+            } else {
+                scene_depth = linear_depth(uv_to_pixel(sample_uv));
+            }
             if (scene_depth > 0.0 && ray_depth > scene_depth) {
                 high = middle;
             } else {
@@ -278,10 +316,11 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let hit_pixel = uv_to_pixel(hit_uv);
 
         // Only the front of a surface sends light our way; hitting a back face means the ray went
-        // behind something the depth buffer can't see past.
+        // behind something the depth buffer can't see past. The glass layer has no normals (the
+        // normal there is the opaque surface's behind it), and glass is seen from both sides.
         let hit_normal = view_from_world_3x3() * (textureLoad(normal_texture, hit_pixel, 0).xyz * 2.0 - 1.0);
-        if (dot(hit_normal, direction) < 0.0) {
-            let radiance = previous_radiance(hit_uv);
+        if (hit_glass || dot(hit_normal, direction) < 0.0) {
+            let radiance = previous_radiance(hit_uv, hit_glass);
             result = vec4(radiance.rgb, radiance.a * edge_fade(hit_uv));
         }
     } else if (direction.z < 0.0) {
@@ -289,7 +328,7 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // would see (the sky is infinitely far away, so where the ray starts doesn't matter).
         let sky_uv = project(vec4(direction, 0.0)).xy;
         if (all(sky_uv == saturate(sky_uv)) && linear_depth(uv_to_pixel(sky_uv)) == 0.0) {
-            let radiance = previous_radiance(sky_uv);
+            let radiance = previous_radiance(sky_uv, false);
             result = vec4(radiance.rgb, radiance.a * edge_fade(sky_uv));
         }
     }
