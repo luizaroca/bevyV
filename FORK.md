@@ -45,3 +45,8 @@ Fork releases are git tags (`vX.Y.Z`); crate versions keep following Bevy's.
   editor gains World Settings (toolbar button) with SSAO and SSGI toggles and SSGI's settings,
   saved in the level. Try it with
   `cargo run -p bevy_editor --release -- assets/levels/ssgi.level.ron`.
+- `v0.4.0`: screen-space reflections (`crates/bevy_extend/src/ssr`) that work with forward and
+  deferred rendering, reflect the sky and see-through objects (glass), and are denoised so they
+  work without TAA. World Settings gains Reflections and Transparent Reflections toggles and
+  the reflection settings, saved in the level; editor shapes whose colour alpha is below 1 are
+  see-through. Try it with `cargo run -p bevy_editor --release -- assets/levels/ssr.level.ron`.
