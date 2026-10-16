@@ -16,6 +16,11 @@ in Bevy updates rarely conflicts:
   The SSGI test (a Cornell box): `cargo run -p bevy_extend_sandbox --bin ssgi --release`.
   The SSR test (a polished floor of six roughnesses): `cargo run -p bevy_extend_sandbox --bin ssr --release`.
 
+Upstream files changed for screen-space reflections (`crates/bevy_extend/src/ssr`): the normal
+prepass is `Rgba16Float` instead of `Rgb10a2Unorm` (`bevy_core_pipeline/src/prepass/mod.rs`), and
+`StandardMaterial` writes its perceptual roughness into its alpha (`bevy_pbr/src/render/pbr_prepass.wesl`
+and `bevy_pbr/src/deferred/functions.wesl`).
+
 When a feature does need to change an upstream file, keep the change small and mention it in the PR.
 
 ## Staying up to date with Bevy

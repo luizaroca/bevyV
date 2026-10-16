@@ -143,9 +143,10 @@ fn deferred_output(in: VertexOutput, pbr_input: PbrInput) -> FragmentOutput {
     out.deferred = deferred_gbuffer_from_pbr_input(pbr_input);
     // lighting pass id (used to determine which lighting shader to run for the fragment)
     out.deferred_lighting_pass_id = pbr_input.material.deferred_lighting_pass_id;
-    // normal if required
+    // normal if required, with perceptual roughness in alpha (Bevy Extend, for screen-space
+    // reflections)
     @if(NORMAL_PREPASS)
-    out.normal = vec4(in.world_normal * 0.5 + vec3(0.5), 1.0);
+    out.normal = vec4(in.world_normal * 0.5 + vec3(0.5), pbr_input.material.perceptual_roughness);
     // motion vectors if required
     @if(MOTION_VECTOR_PREPASS && MESHLET_MESH_MATERIAL_PASS)
     out.motion_vector = in.motion_vector;
