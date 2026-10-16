@@ -8,8 +8,8 @@
 //! SSR is being built in phases (see `/notes/ssr-plan.md` in the project files). Two versions
 //! can be compared:
 //! - Bevy Extend's own SSR (`ExtendScreenSpaceReflections`), which works with forward rendering.
-//!   Its reflections now light the scene; they are not denoised yet, so rough strips are grainy
-//!   without TAA.
+//!   Its reflections light the scene, include the sky and glass, and are denoised, so rough
+//!   strips are smooth without TAA.
 //! - Bevy's built-in `ScreenSpaceReflections`, the baseline. It only works with the deferred
 //!   renderer, so it needs `SSR_DEFERRED=1`. Things to look for: the 0.7 strip is past its
 //!   default roughness range (up to 0.6), the sky never appears in reflections, and rough strips
@@ -21,6 +21,8 @@
 //! - Space: turn SSR on and off, to compare
 //! - B: switch between Bevy Extend's SSR and Bevy's built-in one
 //! - G: cycle Bevy Extend's SSR debug view (off, reflections, confidence, roughness)
+//! - N: toggle Bevy Extend's denoising, to see the raw trace
+//! - K: toggle glass (transparent objects) in Bevy Extend's reflections
 //! - T: toggle temporal antialiasing (TAA)
 //! - P: pause or resume the spinning cube
 //! - F12: save a screenshot next to where the app was started
@@ -29,7 +31,8 @@
 //! For automated checks, `SSR_AUTOSHOT=path.png` saves a screenshot after a short warm-up and
 //! quits, `SSR=0` starts with SSR off, `SSR_BUILTIN=1` starts with Bevy's built-in SSR,
 //! `SSR_DEBUG=off|reflections|confidence|roughness` picks the starting debug view, `SSR_TAA=0`
-//! starts with TAA off, `SSR_SPIN=0` starts with the cube still and `SSR_DEFERRED=1` renders
+//! starts with TAA off, `SSR_DENOISE=0` starts with denoising off, `SSR_GLASS=0` starts with
+//! glass out of reflections, `SSR_SPIN=0` starts with the cube still and `SSR_DEFERRED=1` renders
 //! with Bevy's deferred renderer instead of forward. `SSR_CAMERA=x,y,z,tx,ty,tz` places the camera
 //! at x,y,z looking at tx,ty,tz.
 
@@ -73,6 +76,8 @@ struct Settings {
     /// Bevy's built-in SSR instead of Bevy Extend's.
     builtin: bool,
     debug_view: SsrDebugView,
+    denoise: bool,
+    glass: bool,
     taa: bool,
     spinning: bool,
 }
@@ -89,6 +94,8 @@ impl Default for Settings {
             ssr: std::env::var("SSR").map_or(true, |value| value != "0"),
             builtin: std::env::var("SSR_BUILTIN").is_ok_and(|value| value == "1"),
             debug_view,
+            denoise: std::env::var("SSR_DENOISE").map_or(true, |value| value != "0"),
+            glass: std::env::var("SSR_GLASS").map_or(true, |value| value != "0"),
             taa: std::env::var("SSR_TAA").map_or(true, |value| value != "0"),
             spinning: std::env::var("SSR_SPIN").map_or(true, |value| value != "0"),
         }
@@ -339,6 +346,12 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>)
     if keys.just_pressed(KeyCode::KeyG) {
         settings.debug_view = settings.debug_view.next();
     }
+    if keys.just_pressed(KeyCode::KeyN) {
+        settings.denoise = !settings.denoise;
+    }
+    if keys.just_pressed(KeyCode::KeyK) {
+        settings.glass = !settings.glass;
+    }
     if keys.just_pressed(KeyCode::KeyT) {
         settings.taa = !settings.taa;
     }
@@ -374,6 +387,12 @@ fn apply_settings(
                 .entity(camera)
                 .insert(ExtendScreenSpaceReflections {
                     debug_view: settings.debug_view,
+                    denoise: settings.denoise,
+                    glass: settings.glass,
+                    max_history_frames: std::env::var("SSR_HISTORY")
+                        .ok()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(16),
                     ..default()
                 });
         } else {
@@ -403,16 +422,20 @@ fn apply_settings(
         SsrDebugView::Roughness => "roughness from the prepass",
     };
     help.0 = format!(
-        "SSR test (Bevy Extend), phase 3: reflections light the scene\n\
+        "SSR test (Bevy Extend), phase 4: denoised\n\
          Renderer: {}\n\
          Floor roughness, left to right: 0.0, 0.1, 0.2, 0.35, 0.5, 0.7\n\
          [Space] SSR: {}\n\
          [B] Version: {version}\n\
          [G] Debug view (Bevy Extend's): {debug_view}\n\
+         [N] Denoising (Bevy Extend's): {}\n\
+         [K] Glass in reflections (Bevy Extend's): {}\n\
          [T] TAA: {}\n\
          [P] Spinning cube: {}",
         if deferred() { "deferred" } else { "forward" },
         on_off(settings.ssr),
+        on_off(settings.denoise),
+        on_off(settings.glass),
         on_off(settings.taa),
         on_off(settings.spinning),
     );

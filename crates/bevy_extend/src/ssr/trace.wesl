@@ -18,14 +18,14 @@
 //! Output: rgb is the light arriving along the reflected ray, before the surface's own specular
 //! color is applied. a is how much to trust it (0 = missed, fall back to the environment map),
 //! faded near screen edges and toward the roughness limit. The output is one noisy sample per
-//! pixel; later phases denoise it.
+//! pixel, which `temporal.wesl` and `spatial.wesl` then denoise.
 
 import bevy_render::{
     view::View,
     maths::PI,
 };
 
-// Keep in sync with `ssr.wesl` and `SsrSettingsUniform`.
+// Keep in sync with `temporal.wesl`, `spatial.wesl` and `SsrSettingsUniform`.
 struct SsrSettings {
     max_roughness: f32,
     thickness: f32,
@@ -34,6 +34,9 @@ struct SsrSettings {
     refine_steps: u32,
     edge_fade: f32,
     frame: u32,
+    denoise: u32,
+    max_history_frames: u32,
+    glass: u32,
 }
 
 @group(0) @binding(0) var depth_texture: texture_depth_2d;
@@ -89,6 +92,9 @@ fn linear_depth(pixel: vec2<i32>) -> f32 {
 
 /// Distance in front of the camera of the glass at a pixel, or 0 where there is none.
 fn glass_linear_depth(pixel: vec2<i32>) -> f32 {
+    if (settings.glass == 0u) {
+        return 0.0;
+    }
     return depth_to_linear(textureLoad(glass_depth_texture, pixel, 0));
 }
 
