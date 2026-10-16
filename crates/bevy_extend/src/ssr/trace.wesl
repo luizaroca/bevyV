@@ -176,11 +176,15 @@ fn previous_radiance(uv: vec2<f32>, with_glass: bool) -> vec4<f32> {
     if (any(previous_uv != saturate(previous_uv))) {
         return vec4(0.0);
     }
+    // The history covers the whole render target, not just this camera's viewport (the editor's
+    // viewport sits beside its panels), so viewport UVs are converted to the texture's.
+    let history_uv = (previous_uv * view.viewport.zw + view.viewport.xy)
+        / vec2<f32>(textureDimensions(history));
     var radiance: vec3<f32>;
     if (with_glass) {
-        radiance = textureSampleLevel(glass_history, linear_sampler, previous_uv, 0.0).rgb;
+        radiance = textureSampleLevel(glass_history, linear_sampler, history_uv, 0.0).rgb;
     } else {
-        radiance = textureSampleLevel(history, linear_sampler, previous_uv, 0.0).rgb;
+        radiance = textureSampleLevel(history, linear_sampler, history_uv, 0.0).rgb;
     }
     return vec4(radiance, 1.0);
 }
