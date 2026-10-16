@@ -101,7 +101,7 @@ impl Primitive {
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component, Default, Clone, Debug, PartialEq)]
 pub struct PrimitiveMaterial {
-    /// Base colour.
+    /// Base colour. An alpha below 1 makes the surface see-through, like glass.
     pub base_color: Color,
     /// 0 is dielectric, 1 is metal.
     pub metallic: f32,
@@ -183,6 +183,12 @@ fn build_materials(
             metallic: surface.metallic.clamp(0.0, 1.0),
             perceptual_roughness: surface.roughness.clamp(0.089, 1.0),
             emissive: surface.emissive,
+            // See-through when the colour's alpha is below 1, like glass.
+            alpha_mode: if surface.base_color.alpha() < 1.0 {
+                AlphaMode::Blend
+            } else {
+                AlphaMode::Opaque
+            },
             ..default()
         };
         commands

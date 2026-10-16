@@ -12,7 +12,10 @@ use bevy::{
     pbr::ScreenSpaceAmbientOcclusion,
     prelude::*,
 };
-use bevy_extend::ssgi::{ScreenSpaceGlobalIllumination, ScreenSpaceGlobalIlluminationPlugin};
+use bevy_extend::{
+    ssgi::{ScreenSpaceGlobalIllumination, ScreenSpaceGlobalIlluminationPlugin},
+    ssr::{ExtendScreenSpaceReflections, ExtendScreenSpaceReflectionsPlugin},
+};
 
 use crate::{viewport::EditorCamera, LevelEntity};
 
@@ -30,10 +33,26 @@ pub struct WorldSettings {
     /// Screen-space global illumination: light bouncing off nearby surfaces, which tints them
     /// with each other's colors. Includes ambient occlusion.
     pub ssgi: bool,
+    /// Screen-space reflections: smooth surfaces (roughness below 0.6) reflect what is on
+    /// screen, including the sky. Elsewhere they keep reflecting the environment.
+    #[reflect(default)]
+    pub reflections: bool,
+    /// Show see-through objects (alpha below 1) in reflections, while `reflections` is on. Costs
+    /// an extra pass over them. This replaces `reflections_settings.glass`.
+    #[reflect(default = "default_true")]
+    pub transparent_reflections: bool,
     /// SSAO quality, radius and intensity, used while `ssao` is on.
     pub ssao_settings: ScreenSpaceAmbientOcclusion,
     /// SSGI strength, reach, denoising and debug views, used while `ssgi` is on.
     pub ssgi_settings: ScreenSpaceGlobalIllumination,
+    /// Reflection roughness limit, ray length and steps, denoising and debug views, used while
+    /// `reflections` is on.
+    #[reflect(default)]
+    pub reflections_settings: ExtendScreenSpaceReflections,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_ambient_brightness() -> f32 {
@@ -54,6 +73,9 @@ impl Default for WorldSettings {
                 ..default()
             },
             ssgi_settings: default(),
+            reflections: false,
+            transparent_reflections: true,
+            reflections_settings: default(),
         }
     }
 }
@@ -82,7 +104,13 @@ pub fn select_world_settings(world: &mut World) {
     world.resource_mut::<InspectorSelection>().0 = Some(entity);
 }
 
-/// Applies the level's settings: ambient light, and SSAO and SSGI on the editor camera.
+/// Whether any effect that needs the prepasses (and so MSAA off) is on.
+fn needs_prepasses(settings: &WorldSettings) -> bool {
+    settings.ssao || settings.ssgi || settings.reflections
+}
+
+/// Applies the level's settings: ambient light, and SSAO, SSGI and reflections on the editor
+/// camera.
 fn apply_world_settings(
     settings: Query<&WorldSettings>,
     cameras: Query<Entity, With<EditorCamera>>,
@@ -112,7 +140,15 @@ fn apply_world_settings(
         } else {
             camera.remove::<ScreenSpaceGlobalIllumination>();
         }
-        if !current.ssao && !current.ssgi {
+        if current.reflections {
+            camera.insert(ExtendScreenSpaceReflections {
+                glass: current.transparent_reflections,
+                ..current.reflections_settings.clone()
+            });
+        } else {
+            camera.remove::<ExtendScreenSpaceReflections>();
+        }
+        if !needs_prepasses(&current) {
             // Back to the plain forward camera the editor starts with.
             camera.remove::<(
                 DepthPrepass,
@@ -125,8 +161,8 @@ fn apply_world_settings(
     *applied = Some(current);
 }
 
-/// SSAO and SSGI read the depth and normal prepasses, which don't support MSAA, so MSAA is off
-/// while either is on. Every camera drawing to the window gets the same setting: Bevy keeps a
+/// SSAO, SSGI and reflections read the depth and normal prepasses, which don't support MSAA, so
+/// MSAA is off while any of them is on. Every camera drawing to the window gets the same setting: Bevy keeps a
 /// separate image per MSAA setting, so the gizmo and UI cameras, which draw over the level
 /// camera, would otherwise keep showing an old frame of the level.
 fn match_msaa(
@@ -135,7 +171,7 @@ fn match_msaa(
     mut commands: Commands,
 ) {
     let current = settings.iter().next();
-    let msaa = if current.is_some_and(|settings| settings.ssao || settings.ssgi) {
+    let msaa = if current.is_some_and(needs_prepasses) {
         Msaa::Off
     } else {
         Msaa::default()
@@ -154,6 +190,9 @@ impl Plugin for WorldSettingsPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<ScreenSpaceGlobalIlluminationPlugin>() {
             app.add_plugins(ScreenSpaceGlobalIlluminationPlugin);
+        }
+        if !app.is_plugin_added::<ExtendScreenSpaceReflectionsPlugin>() {
+            app.add_plugins(ExtendScreenSpaceReflectionsPlugin);
         }
         app.register_type::<WorldSettings>()
             .add_systems(PostStartup, |world: &mut World| {
