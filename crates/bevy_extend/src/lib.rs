@@ -4,6 +4,7 @@
 //! changes rarely conflicts with our work. Add [`ExtendPlugins`] to an app to enable them.
 
 pub mod ssgi;
+pub mod ssr;
 
 use bevy_app::{plugin_group, Plugin};
 
@@ -12,6 +13,7 @@ plugin_group! {
     pub struct ExtendPlugins {
         :ExtendCorePlugin,
         ssgi:::ScreenSpaceGlobalIlluminationPlugin,
+        ssr:::ExtendScreenSpaceReflectionsPlugin,
     }
 }
 

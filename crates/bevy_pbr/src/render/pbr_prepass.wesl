@@ -137,7 +137,33 @@ fn fragment(
 }
 }
 
-        out.normal = vec4(normal * 0.5 + vec3(0.5), 1.0);
+        // Bevy Extend: perceptual roughness goes in alpha, for screen-space reflections.
+@if(BINDLESS)
+        var perceptual_roughness = pbr_bindings::material_array[material_indices[slot].material].perceptual_roughness;
+@else
+        var perceptual_roughness = pbr_bindings::material.perceptual_roughness;
+@if(VERTEX_UVS && !MESHLET_MESH_MATERIAL_PASS)
+        if ((flags & pbr_types::STANDARD_MATERIAL_FLAGS_METALLIC_ROUGHNESS_TEXTURE_BIT) != 0u) {
+            @if(STANDARD_MATERIAL_METALLIC_ROUGHNESS_UV_B)
+            let roughness_uv = (uv_transform * vec3(in.uv_b, 1.0)).xy;
+            @else
+            let roughness_uv = (uv_transform * vec3(in.uv, 1.0)).xy;
+            @if(BINDLESS)
+            let roughness_texture = bindless_textures_2d[material_indices[slot].metallic_roughness_texture];
+            @else
+            let roughness_texture = pbr_bindings::metallic_roughness_texture;
+            @if(BINDLESS)
+            let roughness_sampler = bindless_samplers_filtering[material_indices[slot].metallic_roughness_sampler];
+            @else
+            let roughness_sampler = pbr_bindings::metallic_roughness_sampler;
+            let metallic_roughness = textureSampleBias(roughness_texture, roughness_sampler, roughness_uv, view.mip_bias);
+            if ((flags & pbr_types::STANDARD_MATERIAL_FLAGS_METALLIC_ROUGHNESS_RG_BIT) != 0u) {
+                perceptual_roughness *= metallic_roughness.r;
+            } else {
+                perceptual_roughness *= metallic_roughness.g;
+            }
+        }
+        out.normal = vec4(normal * 0.5 + vec3(0.5), perceptual_roughness);
     } else {
         out.normal = vec4(in.world_normal * 0.5 + vec3(0.5), 1.0);
     }

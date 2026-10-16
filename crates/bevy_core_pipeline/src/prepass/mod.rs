@@ -56,7 +56,12 @@ use bevy_render::{
     texture::ColorAttachment,
 };
 
-pub const NORMAL_PREPASS_FORMAT: TextureFormat = TextureFormat::Rgb10a2Unorm;
+/// World-space normal in rgb (encoded as `n * 0.5 + 0.5`) and, for `StandardMaterial`, perceptual
+/// roughness in a (1.0 for other materials).
+///
+/// Bevy Extend: was `Rgb10a2Unorm`, whose 2-bit alpha can't hold roughness. Screen-space
+/// reflections (`bevy_extend::ssr`) need it.
+pub const NORMAL_PREPASS_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub const MOTION_VECTOR_PREPASS_FORMAT: TextureFormat = TextureFormat::Rg16Float;
 
 /// If added to a [`bevy_camera::Camera3d`] then depth values will be copied to a separate texture available to the main pass.

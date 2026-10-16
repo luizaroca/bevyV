@@ -1,30 +1,36 @@
 //! Screen-space reflections (SSR) test scene.
 //!
 //! A polished floor made of six strips, each rougher than the last (0.0, 0.1, 0.2, 0.35, 0.5,
-//! 0.7), in front of a wall of colored panels and a row of objects: a white sphere, a chrome
-//! sphere, a rough gold sphere, a spinning green cube, a blue cylinder, a glass cube and a
+//! 0.7), in front of a wall of colored panels and a row of objects: a glass cube, a chrome
+//! sphere, a rough gold sphere, a spinning green cube, a blue cylinder, a white sphere and a
 //! glowing bar. Each strip shows how reflections hold up at its roughness.
 //!
-//! SSR is being built in phases (see `/notes/ssr-plan.md` in the project files). This first
-//! phase shows Bevy's built-in `ScreenSpaceReflections` as the baseline to compare against. It
-//! only works with the deferred renderer, so the scene is rendered deferred. Things to look for:
-//! the 0.7 strip is past its default roughness range (up to 0.6) and only shows the environment
-//! map, and the 0.0 strip sits at its lower edge (Bevy raises roughness to 0.089 at least), so
-//! its reflections are faded; the sky and the glass cube never appear in reflections; rough
-//! strips are very noisy without TAA.
+//! SSR is being built in phases (see `/notes/ssr-plan.md` in the project files). Two versions
+//! can be compared:
+//! - Bevy Extend's own SSR (`ExtendScreenSpaceReflections`), which works with forward rendering.
+//!   It now traces reflections but doesn't light the scene yet, so the scene starts on its
+//!   reflections debug view.
+//! - Bevy's built-in `ScreenSpaceReflections`, the baseline. It only works with the deferred
+//!   renderer, so it needs `SSR_DEFERRED=1`. Things to look for: the 0.7 strip is past its
+//!   default roughness range (up to 0.6), the sky never appears in reflections, and rough strips
+//!   are very noisy without TAA.
 //!
 //! Run it with `cargo run -p bevy_extend_sandbox --bin ssr --release`.
 //!
 //! Controls:
 //! - Space: turn SSR on and off, to compare
+//! - B: switch between Bevy Extend's SSR and Bevy's built-in one
+//! - G: cycle Bevy Extend's SSR debug view (off, reflections, confidence, roughness)
 //! - T: toggle temporal antialiasing (TAA)
 //! - P: pause or resume the spinning cube
 //! - F12: save a screenshot next to where the app was started
 //! - Hold right click (or press M) to look around, WASD to move, Q/E to go down/up
 //!
 //! For automated checks, `SSR_AUTOSHOT=path.png` saves a screenshot after a short warm-up and
-//! quits, `SSR=0` starts with SSR off, `SSR_TAA=0` starts with TAA off and `SSR_SPIN=0` starts
-//! with the cube still.
+//! quits, `SSR=0` starts with SSR off, `SSR_BUILTIN=1` starts with Bevy's built-in SSR,
+//! `SSR_DEBUG=off|reflections|confidence|roughness` picks the starting debug view, `SSR_TAA=0`
+//! starts with TAA off, `SSR_SPIN=0` starts with the cube still and `SSR_DEFERRED=1` renders
+//! with Bevy's deferred renderer instead of forward.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
@@ -36,7 +42,10 @@ use bevy::{
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
 };
-use bevy_extend::ExtendPlugins;
+use bevy_extend::{
+    ssr::{ExtendScreenSpaceReflections, SsrDebugView},
+    ExtendPlugins,
+};
 
 /// Where the camera looks at the scene from, and what it looks at.
 const CAMERA_POSITION: Vec3 = Vec3::new(0.0, 1.4, 6.0);
@@ -60,14 +69,27 @@ const AUTOSHOT_FRAME: u32 = 120;
 #[derive(Resource)]
 struct Settings {
     ssr: bool,
+    /// Bevy's built-in SSR instead of Bevy Extend's.
+    builtin: bool,
+    debug_view: SsrDebugView,
     taa: bool,
     spinning: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
+        let debug_view = match std::env::var("SSR_DEBUG").as_deref() {
+            Ok("off") => SsrDebugView::Off,
+            Ok("confidence") => SsrDebugView::Confidence,
+            Ok("roughness") => SsrDebugView::Roughness,
+            // Bevy Extend's SSR doesn't light the scene yet, so its reflections are only visible
+            // in the debug view.
+            _ => SsrDebugView::Reflections,
+        };
         Self {
             ssr: std::env::var("SSR").map_or(true, |value| value != "0"),
+            builtin: std::env::var("SSR_BUILTIN").is_ok_and(|value| value == "1"),
+            debug_view,
             taa: std::env::var("SSR_TAA").map_or(true, |value| value != "0"),
             spinning: std::env::var("SSR_SPIN").map_or(true, |value| value != "0"),
         }
@@ -80,35 +102,41 @@ struct HelpText;
 #[derive(Component)]
 struct Spinning;
 
+fn deferred() -> bool {
+    std::env::var("SSR_DEFERRED").is_ok_and(|value| value == "1")
+}
+
 fn main() {
-    App::new()
+    let mut app = App::new();
+    if deferred() {
         // Bevy's built-in SSR reads the deferred G-buffer, so opaque materials render deferred.
-        .insert_resource(DefaultOpaqueRendererMethod::deferred())
-        .add_plugins((
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Bevy Extend: SSR test".into(),
-                        ..default()
-                    }),
-                    ..default()
-                })
-                // The sky comes from the repository's shared `assets` folder. Bevy looks for
-                // assets next to this crate when started with `cargo run`.
-                .set(AssetPlugin {
-                    file_path: "../../assets".into(),
+        app.insert_resource(DefaultOpaqueRendererMethod::deferred());
+    }
+    app.add_plugins((
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Bevy Extend: SSR test".into(),
                     ..default()
                 }),
-            FreeCameraPlugin,
-            ExtendPlugins,
-        ))
-        .init_resource::<Settings>()
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (handle_input, apply_settings, spin, take_screenshots).chain(),
-        )
-        .run();
+                ..default()
+            })
+            // The sky comes from the repository's shared `assets` folder. Bevy looks for
+            // assets next to this crate when started with `cargo run`.
+            .set(AssetPlugin {
+                file_path: "../../assets".into(),
+                ..default()
+            }),
+        FreeCameraPlugin,
+        ExtendPlugins,
+    ))
+    .init_resource::<Settings>()
+    .add_systems(Startup, setup)
+    .add_systems(
+        Update,
+        (handle_input, apply_settings, spin, take_screenshots).chain(),
+    )
+    .run();
 }
 
 fn setup(
@@ -170,7 +198,7 @@ fn setup(
             perceptual_roughness: 0.6,
             ..default()
         })),
-        Transform::from_xyz(row_x(0), 0.45, OBJECTS_Z),
+        Transform::from_xyz(row_x(5), 0.45, OBJECTS_Z),
     ));
     commands.spawn((
         Name::new("Chrome sphere"),
@@ -225,7 +253,7 @@ fn setup(
             perceptual_roughness: 0.05,
             ..default()
         })),
-        Transform::from_xyz(row_x(5), 0.4, OBJECTS_Z),
+        Transform::from_xyz(row_x(0), 0.4, OBJECTS_Z),
     ));
     // A glowing bar standing on the floor, near the camera: a bright, easy-to-spot reflection.
     commands.spawn((
@@ -249,28 +277,32 @@ fn setup(
         Transform::from_xyz(3.0, 6.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    commands.spawn((
-        Name::new("Camera"),
-        Camera3d::default(),
-        Hdr,
-        Transform::from_translation(CAMERA_POSITION).looking_at(CAMERA_TARGET, Vec3::Y),
-        FreeCamera::default(),
-        // Deferred rendering doesn't support MSAA.
-        Msaa::Off,
-        DeferredPrepass,
-        // The sky, and the light it casts. SSR falls back to this where its rays miss.
-        EnvironmentMapLight {
-            diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
-            specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
-            intensity: SKY_BRIGHTNESS,
-            ..default()
-        },
-        Skybox {
-            image: Some(asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2")),
-            brightness: SKY_BRIGHTNESS,
-            ..default()
-        },
-    ));
+    let camera = commands
+        .spawn((
+            Name::new("Camera"),
+            Camera3d::default(),
+            Hdr,
+            Transform::from_translation(CAMERA_POSITION).looking_at(CAMERA_TARGET, Vec3::Y),
+            FreeCamera::default(),
+            // Both SSRs read prepasses, which (like deferred rendering) don't support MSAA.
+            Msaa::Off,
+            // The sky, and the light it casts. SSR falls back to this where its rays miss.
+            EnvironmentMapLight {
+                diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
+                specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
+                intensity: SKY_BRIGHTNESS,
+                ..default()
+            },
+            Skybox {
+                image: Some(asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2")),
+                brightness: SKY_BRIGHTNESS,
+                ..default()
+            },
+        ))
+        .id();
+    if deferred() {
+        commands.entity(camera).insert(DeferredPrepass);
+    }
 
     commands.spawn((
         HelpText,
@@ -287,6 +319,12 @@ fn setup(
 fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>) {
     if keys.just_pressed(KeyCode::Space) {
         settings.ssr = !settings.ssr;
+    }
+    if keys.just_pressed(KeyCode::KeyB) {
+        settings.builtin = !settings.builtin;
+    }
+    if keys.just_pressed(KeyCode::KeyG) {
+        settings.debug_view = settings.debug_view.next();
     }
     if keys.just_pressed(KeyCode::KeyT) {
         settings.taa = !settings.taa;
@@ -306,13 +344,29 @@ fn apply_settings(
         return;
     }
 
+    // Bevy's built-in SSR would turn the camera's deferred prepass on, but without deferred
+    // materials it would have nothing to read.
+    let builtin = settings.ssr && settings.builtin && deferred();
+    let extend = settings.ssr && !settings.builtin;
     for camera in &cameras {
-        if settings.ssr {
+        if builtin {
             commands
                 .entity(camera)
                 .insert(ScreenSpaceReflections::default());
         } else {
             commands.entity(camera).remove::<ScreenSpaceReflections>();
+        }
+        if extend {
+            commands
+                .entity(camera)
+                .insert(ExtendScreenSpaceReflections {
+                    debug_view: settings.debug_view,
+                    ..default()
+                });
+        } else {
+            commands
+                .entity(camera)
+                .remove::<ExtendScreenSpaceReflections>();
         }
         if settings.taa {
             commands
@@ -324,12 +378,27 @@ fn apply_settings(
     }
 
     let on_off = |on: bool| if on { "on" } else { "off" };
+    let version = match (settings.builtin, deferred()) {
+        (false, _) => "Bevy Extend's",
+        (true, true) => "Bevy's built-in",
+        (true, false) => "Bevy's built-in (needs SSR_DEFERRED=1, so off)",
+    };
+    let debug_view = match settings.debug_view {
+        SsrDebugView::Off => "off (not applied to lighting yet)",
+        SsrDebugView::Reflections => "reflections",
+        SsrDebugView::Confidence => "confidence (white: hit)",
+        SsrDebugView::Roughness => "roughness from the prepass",
+    };
     help.0 = format!(
-        "SSR test (Bevy Extend), phase 1: Bevy's built-in SSR (deferred)\n\
+        "SSR test (Bevy Extend), phase 2: forward trace\n\
+         Renderer: {}\n\
          Floor roughness, left to right: 0.0, 0.1, 0.2, 0.35, 0.5, 0.7\n\
          [Space] SSR: {}\n\
+         [B] Version: {version}\n\
+         [G] Debug view (Bevy Extend's): {debug_view}\n\
          [T] TAA: {}\n\
          [P] Spinning cube: {}",
+        if deferred() { "deferred" } else { "forward" },
         on_off(settings.ssr),
         on_off(settings.taa),
         on_off(settings.spinning),
