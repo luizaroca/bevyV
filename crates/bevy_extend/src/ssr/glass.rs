@@ -50,7 +50,7 @@ use tracing::warn;
 
 use bevy_core_pipeline::prepass::ViewPrepassTextures;
 
-use super::SsrTextures;
+use super::{ExtendScreenSpaceReflections, SsrTextures};
 
 /// Format of the glass layer's depth.
 pub(super) const GLASS_DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
@@ -222,9 +222,11 @@ pub(super) fn prepare_glass(
         .write_buffer(&render_device, &render_queue);
 }
 
-/// Draws the glass layer's depth. Runs every frame, so the layer is cleared even with no glass.
+/// Draws the glass layer's depth. Runs every frame while glass reflections are on, so the layer
+/// is cleared even with no glass in view.
 pub(super) fn ssr_glass_depth(
     view: ViewQuery<(
+        &ExtendScreenSpaceReflections,
         &ExtractedCamera,
         &ViewPrepassTextures,
         &SsrTextures,
@@ -238,7 +240,11 @@ pub(super) fn ssr_glass_depth(
     mesh_allocator: Res<MeshAllocator>,
     mut ctx: RenderContext,
 ) {
-    let (camera, prepass_textures, textures, view_uniform_offset) = view.into_inner();
+    let (ssr, camera, prepass_textures, textures, view_uniform_offset) = view.into_inner();
+    if !ssr.glass {
+        // The trace ignores the glass layer when glass is off.
+        return;
+    }
     let (Some(opaque_depth), Some(view_binding), Some(draws_binding)) = (
         prepass_textures.depth_only_view(),
         view_uniforms.uniforms.binding(),

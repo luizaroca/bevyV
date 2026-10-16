@@ -17,7 +17,8 @@
 //!    made for rays that hit glass, which gets its own depth layer (`glass.rs`) right after the
 //!    prepass. A debug view can replace the finished image.
 //!
-//! The reflections are not denoised yet (phase 4).
+//! Between 1 and 2, `temporal.wesl` averages the trace over frames and `spatial.wesl` blurs it
+//! along surfaces, more for rougher ones, so glossy reflections are smooth without TAA.
 
 mod glass;
 
@@ -79,6 +80,10 @@ const HISTORY_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 /// Format of the trace output: reflected light in rgb, how much to trust it in a.
 const REFLECTIONS_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
+/// Format of the running average's bookkeeping: the surface's distance and how many frames are
+/// averaged.
+const META_FORMAT: TextureFormat = TextureFormat::Rg32Float;
+
 /// Adds Bevy Extend's screen-space reflections. Part of [`ExtendPlugins`](crate::ExtendPlugins).
 #[derive(Default)]
 pub struct ExtendScreenSpaceReflectionsPlugin;
@@ -93,8 +98,8 @@ pub struct ExtendScreenSpaceReflectionsPlugin;
 /// Only `StandardMaterial` surfaces reflect, because they store their roughness in the normal
 /// prepass; other materials count as fully rough.
 ///
-/// Work in progress: the reflections are one noisy ray per pixel and not denoised yet, so rough
-/// surfaces look grainy without TAA.
+/// One ray per pixel is traced each frame and denoised over time and space, so it works without
+/// TAA (TAA still smooths what is left).
 #[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default, Clone, PartialEq)]
 #[require(DepthPrepass, NormalPrepass, MotionVectorPrepass, TonemappingPass)]
@@ -113,6 +118,14 @@ pub struct ExtendScreenSpaceReflections {
     pub refine_steps: u32,
     /// Fraction of the screen over which reflections fade out near its edges.
     pub edge_fade: f32,
+    /// Show transparent and transmissive objects (glass) in reflections. Costs an extra depth
+    /// pass over them and a copy of the image.
+    pub glass: bool,
+    /// Average over frames and blur along surfaces. Turn off to see the raw trace.
+    pub denoise: bool,
+    /// The most frames averaged together, for rough surfaces (smooth ones keep fewer, so their
+    /// sharp reflections don't smear). More is smoother; fewer reacts faster.
+    pub max_history_frames: u32,
     /// Replaces the image with one of SSR's buffers, for checking them by eye.
     pub debug_view: SsrDebugView,
 }
@@ -126,6 +139,9 @@ impl Default for ExtendScreenSpaceReflections {
             steps: 48,
             refine_steps: 6,
             edge_fade: 0.08,
+            glass: true,
+            denoise: true,
+            max_history_frames: 16,
             debug_view: SsrDebugView::Off,
         }
     }
@@ -139,7 +155,8 @@ pub enum SsrDebugView {
     #[default]
     Off,
     /// The light each pixel's reflection ray found, before the surface's specular color is
-    /// applied, dimmed by how much it is trusted. Black where rays missed.
+    /// applied, dimmed by how much it is trusted. Black where rays missed. Shows the denoised
+    /// result, or the raw trace when `denoise` is off.
     Reflections,
     /// How much each pixel's reflection is trusted: white is a solid hit, black falls back to the
     /// environment map.
@@ -179,6 +196,8 @@ impl Plugin for ExtendScreenSpaceReflectionsPlugin {
         embedded_asset!(app, "ssr.wesl");
         embedded_asset!(app, "trace.wesl");
         embedded_asset!(app, "glass.wesl");
+        embedded_asset!(app, "temporal.wesl");
+        embedded_asset!(app, "spatial.wesl");
 
         app.add_plugins(ExtractComponentPlugin::<ExtendScreenSpaceReflections>::default());
 
@@ -268,7 +287,15 @@ pub struct SsrTextures {
     glass_history_read: CachedTexture,
     /// Depth of the nearest see-through surface in front of the opaque scene (see `glass.rs`).
     glass_depth: CachedTexture,
-    /// Trace output, viewport-relative.
+    /// Raw trace output, viewport-relative.
+    raw: CachedTexture,
+    /// Running average (premultiplied by confidence) and its bookkeeping (distance, frames),
+    /// swapped every frame like the history.
+    accumulated_write: CachedTexture,
+    accumulated_read: CachedTexture,
+    meta_write: CachedTexture,
+    meta_read: CachedTexture,
+    /// Final denoised output that lighting reads.
     reflections: CachedTexture,
 }
 
@@ -309,22 +336,37 @@ fn prepare_ssr_textures(
                 ..descriptor.clone()
             },
         );
+        let storage = |label, format| TextureDescriptor {
+            label: Some(label),
+            format,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+            ..descriptor.clone()
+        };
+        let raw = texture_cache.get(
+            &render_device,
+            storage("ssr_raw_texture", REFLECTIONS_FORMAT),
+        );
+        let accumulated_1 = texture_cache.get(
+            &render_device,
+            storage("ssr_accumulated_1_texture", REFLECTIONS_FORMAT),
+        );
+        let accumulated_2 = texture_cache.get(
+            &render_device,
+            storage("ssr_accumulated_2_texture", REFLECTIONS_FORMAT),
+        );
+        let meta_1 = texture_cache.get(&render_device, storage("ssr_meta_1_texture", META_FORMAT));
+        let meta_2 = texture_cache.get(&render_device, storage("ssr_meta_2_texture", META_FORMAT));
         let reflections = texture_cache.get(
             &render_device,
-            TextureDescriptor {
-                label: Some("ssr_reflections_texture"),
-                format: REFLECTIONS_FORMAT,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                ..descriptor
-            },
+            storage("ssr_reflections_texture", REFLECTIONS_FORMAT),
         );
 
-        let (history_write, history_read, glass_history_write, glass_history_read) =
-            if frame_count.0.is_multiple_of(2) {
-                (history_1, history_2, glass_history_1, glass_history_2)
-            } else {
-                (history_2, history_1, glass_history_2, glass_history_1)
-            };
+        let even = frame_count.0.is_multiple_of(2);
+        let swap = |a, b| if even { (a, b) } else { (b, a) };
+        let (history_write, history_read) = swap(history_1, history_2);
+        let (glass_history_write, glass_history_read) = swap(glass_history_1, glass_history_2);
+        let (accumulated_write, accumulated_read) = swap(accumulated_1, accumulated_2);
+        let (meta_write, meta_read) = swap(meta_1, meta_2);
         commands.entity(entity).insert((
             ScreenSpaceSpecularTexture(reflections.default_view.clone()),
             SsrTextures {
@@ -333,6 +375,11 @@ fn prepare_ssr_textures(
                 glass_history_write,
                 glass_history_read,
                 glass_depth,
+                raw,
+                accumulated_write,
+                accumulated_read,
+                meta_write,
+                meta_read,
                 reflections,
             },
         ));
@@ -349,6 +396,9 @@ struct SsrSettingsUniform {
     refine_steps: u32,
     edge_fade: f32,
     frame: u32,
+    denoise: u32,
+    max_history_frames: u32,
+    glass: u32,
 }
 
 /// A view's settings uniform for the trace.
@@ -375,6 +425,9 @@ fn prepare_ssr_settings(
             refine_steps: ssr.refine_steps,
             edge_fade: ssr.edge_fade.clamp(0.0, 0.5),
             frame: frame_count.0,
+            denoise: ssr.denoise.into(),
+            max_history_frames: ssr.max_history_frames.max(1),
+            glass: ssr.glass.into(),
         };
         match buffer {
             Some(mut buffer) => {
@@ -397,6 +450,10 @@ pub struct SsrPipeline {
     layout: BindGroupLayoutDescriptor,
     trace_layout: BindGroupLayoutDescriptor,
     trace_pipeline: CachedComputePipelineId,
+    temporal_layout: BindGroupLayoutDescriptor,
+    temporal_pipeline: CachedComputePipelineId,
+    spatial_layout: BindGroupLayoutDescriptor,
+    spatial_pipeline: CachedComputePipelineId,
     sampler: Sampler,
     fullscreen_shader: FullscreenShader,
     fragment_shader: Handle<Shader>,
@@ -451,6 +508,70 @@ fn init_ssr_pipeline(
         entry_point: Some("trace".into()),
         ..default()
     });
+    let temporal_layout = BindGroupLayoutDescriptor::new(
+        "ssr_temporal_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_depth_2d(),
+                // Normals and roughness
+                unfilterable(),
+                // Motion vectors
+                unfilterable(),
+                // Raw trace
+                unfilterable(),
+                // Last frame's running average and its bookkeeping
+                unfilterable(),
+                unfilterable(),
+                // This frame's
+                texture_storage_2d(REFLECTIONS_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(META_FORMAT, StorageTextureAccess::WriteOnly),
+                uniform_buffer::<ViewUniform>(true),
+                uniform_buffer::<SsrSettingsUniform>(false),
+            ),
+        ),
+    );
+    let spatial_layout = BindGroupLayoutDescriptor::new(
+        "ssr_spatial_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_depth_2d(),
+                // Normals and roughness
+                unfilterable(),
+                // Running average and its bookkeeping
+                unfilterable(),
+                unfilterable(),
+                texture_storage_2d(REFLECTIONS_FORMAT, StorageTextureAccess::WriteOnly),
+                uniform_buffer::<ViewUniform>(true),
+                uniform_buffer::<SsrSettingsUniform>(false),
+            ),
+        ),
+    );
+    let compute_pipeline = |label: &'static str,
+                            layout: &BindGroupLayoutDescriptor,
+                            shader,
+                            entry_point: &'static str| {
+        pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some(label.into()),
+            layout: vec![layout.clone()],
+            shader,
+            entry_point: Some(entry_point.into()),
+            ..default()
+        })
+    };
+    let temporal_pipeline = compute_pipeline(
+        "ssr_temporal_pipeline",
+        &temporal_layout,
+        load_embedded_asset!(asset_server.as_ref(), "temporal.wesl"),
+        "temporal",
+    );
+    let spatial_pipeline = compute_pipeline(
+        "ssr_spatial_pipeline",
+        &spatial_layout,
+        load_embedded_asset!(asset_server.as_ref(), "spatial.wesl"),
+        "spatial",
+    );
     let sampler = render_device.create_sampler(&SamplerDescriptor {
         label: Some("ssr_linear_sampler"),
         mag_filter: FilterMode::Linear,
@@ -465,6 +586,10 @@ fn init_ssr_pipeline(
         layout,
         trace_layout,
         trace_pipeline,
+        temporal_layout,
+        temporal_pipeline,
+        spatial_layout,
+        spatial_pipeline,
         sampler,
         fullscreen_shader: fullscreen_shader.clone(),
         fragment_shader: load_embedded_asset!(asset_server.as_ref(), "ssr.wesl"),
@@ -552,7 +677,7 @@ fn prepare_ssr_pipelines(
     }
 }
 
-/// Traces one reflection ray per pixel into the reflections texture.
+/// Traces one reflection ray per pixel, then denoises the result into the reflections texture.
 fn ssr_trace(
     view: ViewQuery<(
         &ExtractedCamera,
@@ -575,6 +700,8 @@ fn ssr_trace(
         Some(view_binding),
         Some(settings_binding),
         Some(trace_pipeline),
+        Some(temporal_pipeline),
+        Some(spatial_pipeline),
     ) = (
         camera.physical_viewport_size,
         prepass_textures.depth_only_view(),
@@ -583,12 +710,15 @@ fn ssr_trace(
         view_uniforms.uniforms.binding(),
         settings.0.binding(),
         pipeline_cache.get_compute_pipeline(ssr_pipeline.trace_pipeline),
+        pipeline_cache.get_compute_pipeline(ssr_pipeline.temporal_pipeline),
+        pipeline_cache.get_compute_pipeline(ssr_pipeline.spatial_pipeline),
     )
     else {
         return;
     };
 
-    let bind_group = ctx.render_device().create_bind_group(
+    let render_device = ctx.render_device().clone();
+    let trace_bind_group = render_device.create_bind_group(
         Some("ssr_trace_bind_group"),
         &pipeline_cache.get_bind_group_layout(&ssr_pipeline.trace_layout),
         &BindGroupEntries::sequential((
@@ -597,26 +727,60 @@ fn ssr_trace(
             motion_vectors,
             &textures.history_read.default_view,
             &ssr_pipeline.sampler,
-            &textures.reflections.default_view,
-            view_binding,
-            settings_binding,
+            &textures.raw.default_view,
+            view_binding.clone(),
+            settings_binding.clone(),
             &textures.glass_depth.default_view,
             &textures.glass_history_read.default_view,
         )),
     );
+    let temporal_bind_group = render_device.create_bind_group(
+        Some("ssr_temporal_bind_group"),
+        &pipeline_cache.get_bind_group_layout(&ssr_pipeline.temporal_layout),
+        &BindGroupEntries::sequential((
+            depth,
+            normals,
+            motion_vectors,
+            &textures.raw.default_view,
+            &textures.accumulated_read.default_view,
+            &textures.meta_read.default_view,
+            &textures.accumulated_write.default_view,
+            &textures.meta_write.default_view,
+            view_binding.clone(),
+            settings_binding.clone(),
+        )),
+    );
+    let spatial_bind_group = render_device.create_bind_group(
+        Some("ssr_spatial_bind_group"),
+        &pipeline_cache.get_bind_group_layout(&ssr_pipeline.spatial_layout),
+        &BindGroupEntries::sequential((
+            depth,
+            normals,
+            &textures.accumulated_write.default_view,
+            &textures.meta_write.default_view,
+            &textures.reflections.default_view,
+            view_binding,
+            settings_binding,
+        )),
+    );
+    let passes = [
+        ("ssr_trace", trace_pipeline, &trace_bind_group),
+        ("ssr_temporal", temporal_pipeline, &temporal_bind_group),
+        ("ssr_spatial", spatial_pipeline, &spatial_bind_group),
+    ];
 
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
     let time_span = diagnostics.time_span(ctx.command_encoder(), "ssr");
-    {
+    for (label, pipeline, bind_group) in passes {
         let mut pass = ctx
             .command_encoder()
             .begin_compute_pass(&ComputePassDescriptor {
-                label: Some("ssr_trace"),
+                label: Some(label),
                 timestamp_writes: None,
             });
-        pass.set_pipeline(trace_pipeline);
-        pass.set_bind_group(0, &bind_group, &[view_uniform_offset.offset]);
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[view_uniform_offset.offset]);
         pass.dispatch_workgroups(viewport_size.x.div_ceil(8), viewport_size.y.div_ceil(8), 1);
     }
     time_span.end(ctx.command_encoder());
@@ -708,6 +872,7 @@ fn copy_into(
 /// is picked, shows one of SSR's buffers instead of the image.
 fn ssr_store_glass_history_and_debug(
     view: ViewQuery<(
+        &ExtendScreenSpaceReflections,
         &ViewTarget,
         &ViewPrepassTextures,
         &SsrTextures,
@@ -717,20 +882,22 @@ fn ssr_store_glass_history_and_debug(
     pipeline_cache: Res<PipelineCache>,
     mut ctx: RenderContext,
 ) {
-    let (view_target, prepass_textures, textures, pipeline_ids) = view.into_inner();
+    let (ssr, view_target, prepass_textures, textures, pipeline_ids) = view.into_inner();
     let Some(normals) = prepass_textures.normal_view() else {
         return;
     };
-    copy_into(
-        &mut ctx,
-        &ssr_pipeline,
-        &pipeline_cache,
-        pipeline_ids,
-        view_target.main_texture_view(),
-        textures,
-        normals,
-        &textures.glass_history_write.default_view,
-    );
+    if ssr.glass {
+        copy_into(
+            &mut ctx,
+            &ssr_pipeline,
+            &pipeline_cache,
+            pipeline_ids,
+            view_target.main_texture_view(),
+            textures,
+            normals,
+            &textures.glass_history_write.default_view,
+        );
+    }
 
     let Some(debug_pipeline) = pipeline_ids
         .debug_view
