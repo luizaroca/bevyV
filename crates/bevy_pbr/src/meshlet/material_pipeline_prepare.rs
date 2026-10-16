@@ -58,6 +58,7 @@ pub fn prepare_material_meshlet_meshes_main_opaque_pass(
                 Option<&ScreenSpaceAmbientOcclusion>,
                 Has<DistanceFog>,
                 Has<ScreenSpaceIndirectLight>,
+                Has<ScreenSpaceSpecular>,
             ),
             (
                 Has<NormalPrepass>,
@@ -82,7 +83,7 @@ pub fn prepare_material_meshlet_meshes_main_opaque_pass(
         tonemapping,
         dither,
         shadow_filter_method,
-        (ssao, distance_fog, screen_space_indirect_light),
+        (ssao, distance_fog, screen_space_indirect_light, screen_space_specular),
         (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass),
         temporal_jitter,
         projection,
@@ -156,6 +157,9 @@ pub fn prepare_material_meshlet_meshes_main_opaque_pass(
         }
         if screen_space_indirect_light {
             view_key |= MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT;
+        }
+        if screen_space_specular {
+            view_key |= MeshPipelineKey::SCREEN_SPACE_SPECULAR;
         }
         if distance_fog {
             view_key |= MeshPipelineKey::DISTANCE_FOG;

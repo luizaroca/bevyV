@@ -56,8 +56,9 @@ use crate::{
     GpuFog, GpuLights, LightMeta, LightProbesBuffer, LightProbesUniform, MeshPipeline,
     MeshPipelineKey, RenderViewLightProbes, ScreenSpaceAmbientOcclusionResources,
     ScreenSpaceIndirectLight, ScreenSpaceIndirectLightTexture, ScreenSpaceReflectionsBuffer,
-    ScreenSpaceReflectionsUniform, ShadowSamplers, ViewClusterBindings, ViewShadowBindings,
-    ViewTransmissionTexture, CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT,
+    ScreenSpaceReflectionsUniform, ScreenSpaceSpecular, ScreenSpaceSpecularTexture, ShadowSamplers,
+    ViewClusterBindings, ViewShadowBindings, ViewTransmissionTexture,
+    CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT,
 };
 
 #[cfg(all(feature = "webgl", target_arch = "wasm32", not(feature = "webgpu")))]
@@ -99,6 +100,7 @@ bitflags::bitflags! {
         const AREA_LIGHT_LUTS                  = 1 << 15;
         const VIEW_TRANSMISSION_TEXTURE        = 1 << 16;
         const SCREEN_SPACE_INDIRECT_LIGHT      = 1 << 17; // Bevy Extend fork
+        const SCREEN_SPACE_SPECULAR            = 1 << 18; // Bevy Extend fork
     }
 }
 
@@ -169,6 +171,9 @@ impl From<MeshPipelineKey> for MeshPipelineViewLayoutKey {
         }
         if value.contains(MeshPipelineKey::SCREEN_SPACE_INDIRECT_LIGHT) {
             result |= MeshPipelineViewLayoutKey::SCREEN_SPACE_INDIRECT_LIGHT;
+        }
+        if value.contains(MeshPipelineKey::SCREEN_SPACE_SPECULAR) {
+            result |= MeshPipelineViewLayoutKey::SCREEN_SPACE_SPECULAR;
         }
         if value.contains(MeshPipelineKey::IRRADIANCE_VOLUME) {
             result |= MeshPipelineViewLayoutKey::IRRADIANCE_VOLUME;
@@ -404,6 +409,15 @@ fn layout_entries(
             // Screen space indirect light texture (Bevy Extend fork)
             (
                 39,
+                texture_2d(TextureSampleType::Float { filterable: false }),
+            ),
+        ));
+    }
+    if layout_key.contains(MeshPipelineViewLayoutKey::SCREEN_SPACE_SPECULAR) {
+        entries = entries.extend_with_indices((
+            // Screen space specular (reflections) texture (Bevy Extend fork)
+            (
+                40,
                 texture_2d(TextureSampleType::Float { filterable: false }),
             ),
         ));
@@ -676,6 +690,8 @@ pub fn prepare_mesh_view_bind_groups(
             Option<&ScreenSpaceAmbientOcclusionResources>,
             Has<ScreenSpaceIndirectLight>,
             Option<&ScreenSpaceIndirectLightTexture>,
+            Has<ScreenSpaceSpecular>,
+            Option<&ScreenSpaceSpecularTexture>,
         ),
         Option<&ViewPrepassTextures>,
         Option<&ViewTransmissionTexture>,
@@ -749,7 +765,13 @@ pub fn prepare_mesh_view_bind_groups(
             shadow_bindings,
             cluster_bindings,
             msaa,
-            (ssao_resources, has_indirect_light, indirect_light_texture),
+            (
+                ssao_resources,
+                has_indirect_light,
+                indirect_light_texture,
+                has_specular,
+                specular_texture,
+            ),
             prepass_textures,
             transmission_texture,
             atmosphere_textures,
@@ -897,6 +919,14 @@ pub fn prepare_mesh_view_bind_groups(
                     .map(|texture| &texture.0)
                     .unwrap_or(&fallback_image_zero.texture_view);
                 entries = entries.extend_with_indices(((39, indirect_light_view),));
+            }
+
+            if has_specular {
+                layout_key |= MeshPipelineViewLayoutKey::SCREEN_SPACE_SPECULAR;
+                let specular_view = specular_texture
+                    .map(|texture| &texture.0)
+                    .unwrap_or(&fallback_image_zero.texture_view);
+                entries = entries.extend_with_indices(((40, specular_view),));
             }
 
             if has_transmission {

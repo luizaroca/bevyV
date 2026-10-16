@@ -8,8 +8,8 @@
 //! SSR is being built in phases (see `/notes/ssr-plan.md` in the project files). Two versions
 //! can be compared:
 //! - Bevy Extend's own SSR (`ExtendScreenSpaceReflections`), which works with forward rendering.
-//!   It now traces reflections but doesn't light the scene yet, so the scene starts on its
-//!   reflections debug view.
+//!   Its reflections now light the scene; they are not denoised yet, so rough strips are grainy
+//!   without TAA.
 //! - Bevy's built-in `ScreenSpaceReflections`, the baseline. It only works with the deferred
 //!   renderer, so it needs `SSR_DEFERRED=1`. Things to look for: the 0.7 strip is past its
 //!   default roughness range (up to 0.6), the sky never appears in reflections, and rough strips
@@ -79,12 +79,10 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let debug_view = match std::env::var("SSR_DEBUG").as_deref() {
-            Ok("off") => SsrDebugView::Off,
+            Ok("reflections") => SsrDebugView::Reflections,
             Ok("confidence") => SsrDebugView::Confidence,
             Ok("roughness") => SsrDebugView::Roughness,
-            // Bevy Extend's SSR doesn't light the scene yet, so its reflections are only visible
-            // in the debug view.
-            _ => SsrDebugView::Reflections,
+            _ => SsrDebugView::Off,
         };
         Self {
             ssr: std::env::var("SSR").map_or(true, |value| value != "0"),
@@ -384,13 +382,13 @@ fn apply_settings(
         (true, false) => "Bevy's built-in (needs SSR_DEFERRED=1, so off)",
     };
     let debug_view = match settings.debug_view {
-        SsrDebugView::Off => "off (not applied to lighting yet)",
+        SsrDebugView::Off => "off",
         SsrDebugView::Reflections => "reflections",
         SsrDebugView::Confidence => "confidence (white: hit)",
         SsrDebugView::Roughness => "roughness from the prepass",
     };
     help.0 = format!(
-        "SSR test (Bevy Extend), phase 2: forward trace\n\
+        "SSR test (Bevy Extend), phase 3: reflections light the scene\n\
          Renderer: {}\n\
          Floor roughness, left to right: 0.0, 0.1, 0.2, 0.35, 0.5, 0.7\n\
          [Space] SSR: {}\n\
