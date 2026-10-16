@@ -1,8 +1,8 @@
 //! Screen-space reflections (SSR) that work with forward and deferred rendering.
 //!
 //! Work in progress, built in phases (see `notes/ssr-plan.md` in the project files). Bevy's own
-//! `bevy_pbr::ScreenSpaceReflections` needs the deferred renderer, misses the sky and transparent
-//! objects, and is noisy without TAA. This one traces against last frame's finished image, like
+//! `bevy_pbr::ScreenSpaceReflections` needs the deferred renderer, misses the sky, and is noisy
+//! without TAA. This one traces against last frame's finished image, like
 //! SSGI, so it doesn't depend on how the frame is lit.
 //!
 //! Each frame:
@@ -12,8 +12,10 @@
 //! 2. The main pass (forward or deferred) uses the reflections as each opaque surface's specular
 //!    indirect light, through the `ScreenSpaceSpecular` hook this fork adds to `bevy_pbr`. Where
 //!    rays miss, it blends back to the environment map and ambient light.
-//! 3. After the main pass, the lit image is copied into the history for the next frame, so
-//!    reflections show up in other reflections, and a debug view can replace the image.
+//! 3. After the opaque pass and the sky, the lit image is copied into the history for the next
+//!    frame, so reflections show up in other reflections. Transparent objects are left out: they
+//!    aren't in the depth buffer, so rays can't tell where they are. A debug view can replace the
+//!    finished image.
 //!
 //! The reflections are not denoised yet (phase 4).
 
@@ -21,6 +23,7 @@ use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle};
 use bevy_camera::{Camera3d, TonemappingPass};
 use bevy_core_pipeline::{
+    core_3d::main_opaque_pass_3d,
     prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass, ViewPrepassTextures},
     schedule::{Core3d, Core3dSystems},
     FullscreenShader,
@@ -34,7 +37,7 @@ use bevy_ecs::{
     system::{lifetimeless::Read, Commands, Query, Res, ResMut},
 };
 use bevy_image::ToExtents;
-use bevy_pbr::{ScreenSpaceSpecular, ScreenSpaceSpecularTexture};
+use bevy_pbr::{main_transmissive_pass_3d, ScreenSpaceSpecular, ScreenSpaceSpecularTexture};
 use bevy_reflect::{std_traits::ReflectDefault, Reflect};
 use bevy_render::{
     camera::ExtractedCamera,
@@ -44,7 +47,7 @@ use bevy_render::{
         binding_types::{
             sampler, texture_2d, texture_depth_2d, texture_storage_2d, uniform_buffer,
         },
-        BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
+        BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
         CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
         ComputePassDescriptor, ComputePipelineDescriptor, FilterMode, FragmentState, Operations,
         PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
@@ -194,8 +197,16 @@ impl Plugin for ExtendScreenSpaceReflectionsPlugin {
                     ssr_trace
                         .after(Core3dSystems::Prepass)
                         .before(Core3dSystems::MainPass),
-                    // After lighting and transparents, before TAA and other post-processing.
-                    ssr_store_history_and_debug
+                    // After opaque lighting and the sky, before transmissive and transparent
+                    // objects. Those aren't in the depth buffer, so a ray can't find where they
+                    // are; if they were in the history, they would show up in reflections at the
+                    // position of whatever is behind them.
+                    ssr_store_history
+                        .after(main_opaque_pass_3d)
+                        .before(main_transmissive_pass_3d)
+                        .in_set(Core3dSystems::MainPass),
+                    // Replaces the finished image, before TAA and other post-processing.
+                    ssr_debug_view
                         .after(Core3dSystems::MainPass)
                         .before(Core3dSystems::EarlyPostProcess),
                 ),
@@ -567,8 +578,24 @@ fn ssr_trace(
     time_span.end(ctx.command_encoder());
 }
 
-/// Copies the lit image into the history and, when a debug view is on, draws it over the image.
-fn ssr_store_history_and_debug(
+/// The bind group the history copy and the debug view share.
+fn ssr_bind_group(
+    ctx: &RenderContext,
+    ssr_pipeline: &SsrPipeline,
+    pipeline_cache: &PipelineCache,
+    image: &TextureView,
+    textures: &SsrTextures,
+    normals: &TextureView,
+) -> BindGroup {
+    ctx.render_device().create_bind_group(
+        Some("ssr_bind_group"),
+        &pipeline_cache.get_bind_group_layout(&ssr_pipeline.layout),
+        &BindGroupEntries::sequential((image, &textures.reflections.default_view, normals)),
+    )
+}
+
+/// Copies the lit image into the history, for the next frame's trace.
+fn ssr_store_history(
     view: ViewQuery<(
         &ViewTarget,
         &ViewPrepassTextures,
@@ -586,41 +613,53 @@ fn ssr_store_history_and_debug(
     let Some(copy_pipeline) = pipeline_cache.get_render_pipeline(pipeline_ids.copy_history) else {
         return;
     };
-    let layout = pipeline_cache.get_bind_group_layout(&ssr_pipeline.layout);
-    let bind_group_for = |ctx: &RenderContext, image: &TextureView| {
-        ctx.render_device().create_bind_group(
-            Some("ssr_bind_group"),
-            &layout,
-            &BindGroupEntries::sequential((image, &textures.reflections.default_view, normals)),
-        )
-    };
+    let bind_group = ssr_bind_group(
+        &ctx,
+        &ssr_pipeline,
+        &pipeline_cache,
+        view_target.main_texture_view(),
+        textures,
+        normals,
+    );
 
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
+    let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
+        label: Some("ssr_copy_history"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view: &textures.history_write.default_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations::default(),
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    let span = diagnostics.pass_span(&mut pass, "ssr_copy_history");
+    pass.set_render_pipeline(copy_pipeline);
+    pass.set_bind_group(0, &bind_group, &[]);
+    pass.draw(0..3, 0..1);
+    span.end(&mut pass);
+}
 
-    // Store the lit image before any debug view replaces it.
-    let bind_group = bind_group_for(&ctx, view_target.main_texture_view());
-    {
-        let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("ssr_copy_history"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &textures.history_write.default_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations::default(),
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        let span = diagnostics.pass_span(&mut pass, "ssr_copy_history");
-        pass.set_render_pipeline(copy_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
-        span.end(&mut pass);
-    }
-
+/// Shows one of SSR's buffers instead of the image, when a debug view is picked.
+fn ssr_debug_view(
+    view: ViewQuery<(
+        &ViewTarget,
+        &ViewPrepassTextures,
+        &SsrTextures,
+        &SsrPipelineIds,
+    )>,
+    ssr_pipeline: Res<SsrPipeline>,
+    pipeline_cache: Res<PipelineCache>,
+    mut ctx: RenderContext,
+) {
+    let (view_target, prepass_textures, textures, pipeline_ids) = view.into_inner();
+    let Some(normals) = prepass_textures.normal_view() else {
+        return;
+    };
     let Some(debug_pipeline) = pipeline_ids
         .debug_view
         .and_then(|id| pipeline_cache.get_render_pipeline(id))
@@ -628,7 +667,17 @@ fn ssr_store_history_and_debug(
         return;
     };
     let post_process = view_target.post_process_write();
-    let bind_group = bind_group_for(&ctx, post_process.source);
+    let bind_group = ssr_bind_group(
+        &ctx,
+        &ssr_pipeline,
+        &pipeline_cache,
+        post_process.source,
+        textures,
+        normals,
+    );
+
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
     let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("ssr_debug_view"),
         color_attachments: &[Some(RenderPassColorAttachment {

@@ -214,6 +214,12 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var previous_t = min_t;
     var hit_t = -1.0;
+    // When the ray passes behind something (further than its assumed thickness), the depth of
+    // that occluder; negative while the ray is in the open.
+    var occluder_depth = -1.0;
+    // Where an occluded ray reached a surface further back, taken as the hit when nothing better
+    // turns up.
+    var hidden_hit_t = -1.0;
     for (var i = 0.0; i < steps; i += 1.0) {
         let t = min_t + (1.0 - min_t) * (i + noise.z) / steps;
         let sample_uv = mix(start.xy, end.xy, t);
@@ -222,16 +228,38 @@ fn trace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         let ray_depth = 1.0 / mix(start_inverse_w, end_inverse_w, t);
         let scene_depth = linear_depth(uv_to_pixel(sample_uv));
-        // Behind the depth buffer's surface, but by less than its assumed thickness.
-        if (scene_depth > 0.0 && ray_depth > scene_depth && ray_depth - scene_depth < settings.thickness) {
-            hit_t = t;
-            break;
+        if (scene_depth > 0.0 && ray_depth > scene_depth) {
+            // Behind the depth buffer's surface, but by less than its assumed thickness.
+            if (ray_depth - scene_depth < settings.thickness) {
+                hit_t = t;
+                break;
+            }
+            // Well behind it: the ray went behind an object, and what it hits there is hidden.
+            // Once it comes out behind a surface further back (usually whatever stands behind
+            // the object), that surface is the best guess. Without this, these rays would fall
+            // back to the environment map and outline objects with a ghost of the sky.
+            if (occluder_depth < 0.0) {
+                occluder_depth = scene_depth;
+            } else if (hidden_hit_t < 0.0 && scene_depth > occluder_depth + settings.thickness) {
+                hidden_hit_t = t;
+            }
+        } else if (scene_depth > 0.0) {
+            // Back in front of the depth buffer, in the open again.
+            occluder_depth = -1.0;
+            hidden_hit_t = -1.0;
         }
         previous_t = t;
     }
 
     var result = vec4(0.0);
-    if (hit_t >= 0.0) {
+    if (hit_t < 0.0 && hidden_hit_t >= 0.0) {
+        let hit_uv = mix(start.xy, end.xy, hidden_hit_t);
+        let hit_normal = view_from_world_3x3() * (textureLoad(normal_texture, uv_to_pixel(hit_uv), 0).xyz * 2.0 - 1.0);
+        if (dot(hit_normal, direction) < 0.0) {
+            let radiance = previous_radiance(hit_uv);
+            result = vec4(radiance.rgb, radiance.a * edge_fade(hit_uv));
+        }
+    } else if (hit_t >= 0.0) {
         // Narrow down where the ray crosses the surface with a binary search.
         var low = previous_t;
         var high = hit_t;
