@@ -14,6 +14,7 @@ in Bevy updates rarely conflicts:
   Extra test scenes live in `crates/bevy_extend_sandbox/src/bin`, for example the soft shadows
   test: `cargo run -p bevy_extend_sandbox --bin soft_shadows --release`.
   The SSGI test (a Cornell box): `cargo run -p bevy_extend_sandbox --bin ssgi --release`.
+  The SSR test (a polished floor of six roughnesses): `cargo run -p bevy_extend_sandbox --bin ssr --release`.
 
 When a feature does need to change an upstream file, keep the change small and mention it in the PR.
 
